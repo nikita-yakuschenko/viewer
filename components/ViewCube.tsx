@@ -84,6 +84,10 @@ function matrix3dFromThree(m: THREE.Matrix4): string {
 /**
  * Как в Three.js CSS3DRenderer.getCameraCSSMatrix: вторая колонка идёт в CSS с противоположным знаком,
  * иначе ось Y экрана расходится с WebGL — гизмо «смотрит не той гранью» относительно сцены.
+ *
+ * Важно: инверсия одной колонки у ортогональной матрицы даёт det = −1 (отражение). Тогда
+ * backface-visibility:hidden на гранях куба скрывает почти все стороны — остаётся «шапка» и углы.
+ * Компенсация: внутренний слой scale3d(-1,1,1) (см. разметку cubeHudInnerRef) — det(отраж·отраж)=+1.
  */
 function applyCss3dViewMatrixConvention(m: THREE.Matrix4): void {
   const e = m.elements;
@@ -194,14 +198,13 @@ function FaceLabel({
   face: ViewCubeDirection;
   children: React.ReactNode;
   setLabelEl: (face: ViewCubeDirection, el: HTMLSpanElement | null) => void;
-  /** По умолчанию подпись скрыта — см. group-hover на кнопке грани. */
   className?: string;
 }) {
   return (
     <span
       ref={(el) => setLabelEl(face, el)}
       className={cn(
-        "inline-flex h-full w-full items-center justify-center [transform-style:preserve-3d] [backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
+        "inline-flex h-full w-full items-center justify-center [transform-style:preserve-3d] [backface-visibility:hidden] [-webkit-backface-visibility:hidden] drop-shadow-[0_0_1px_rgba(255,255,255,0.9)]",
         className
       )}
       style={{ transformOrigin: "center center" }}
@@ -211,9 +214,9 @@ function FaceLabel({
   );
 }
 
-/** Мини-куб угла — те же цвета, что у большого куба (без прозрачных дыр). */
+/** Мини-куб угла — тот же стиль граней большого куба. */
 const miniFaceBase =
-  "absolute left-0 top-0 rounded-[2px] border-0 bg-slate-200 [backface-visibility:hidden] transition-colors duration-150 group-hover:bg-slate-300";
+  "absolute left-0 top-0 rounded-[2px] border border-slate-500/80 bg-gradient-to-br from-slate-200 to-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] [backface-visibility:hidden] transition-colors duration-150 group-hover:border-sky-600 group-hover:from-sky-100 group-hover:to-sky-200";
 
 /** Мини-куб на вершине большого куба — 6 граней, виден с любого ракурса */
 function VertexMiniCube({
@@ -385,15 +388,15 @@ export function ViewCube({
     }
   }, []);
 
-  /** Текст грани только при наведении / фокусе — иначе виден один сплошной куб. */
-  const labelRevealOnHover =
-    "opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-visible:opacity-100";
-  /** Шесть одинаковых граней — без внутренних «рамок» и прозрачных зазоров. */
+  /** Подписи всегда видны — иначе невозможно понять ориентацию; усиление на hover. */
+  const labelEmphasisOnHover =
+    "opacity-95 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100";
+  /** Шесть полноразмерных граней: объём за счёт градиента и inset, без прозрачных «окон». */
   const cubeFaceBase =
-    "group pointer-events-auto absolute left-0 top-0 flex cursor-pointer select-none items-center justify-center rounded-sm border border-slate-400 bg-slate-200 text-[8px] font-bold leading-tight text-slate-800 [backface-visibility:hidden] [-webkit-backface-visibility:hidden] transition-colors duration-150 hover:border-slate-500 hover:bg-slate-300 active:scale-[0.99]";
-  /** Рёбра того же цвета, что грани — визуально единое тело. */
+    "group pointer-events-auto absolute left-0 top-0 flex cursor-pointer select-none items-center justify-center rounded-[3px] border border-slate-500 bg-gradient-to-br from-slate-200 to-slate-300 text-[8px] font-bold leading-tight text-slate-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] [backface-visibility:hidden] [-webkit-backface-visibility:hidden] transition-[border-color,box-shadow,background-color] duration-150 hover:border-sky-600 hover:from-sky-100 hover:to-sky-200 hover:shadow-md active:scale-[0.99]";
+  /** Рёбра в той же палитре, с лёгкой кромкой — читаемый стык без «дыр». */
   const cubeEdgeBase =
-    "group pointer-events-auto absolute border-0 bg-slate-200 [backface-visibility:hidden] [-webkit-backface-visibility:hidden] transition-colors duration-150 hover:bg-slate-300 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1";
+    "group pointer-events-auto absolute rounded-[2px] border border-slate-500/90 bg-gradient-to-br from-slate-200 to-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)] outline-none [backface-visibility:hidden] [-webkit-backface-visibility:hidden] transition-[background-color,border-color] duration-150 hover:border-sky-600 hover:from-sky-100 hover:to-sky-200 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1";
 
   const stepBtn =
     "pointer-events-auto absolute z-[25] flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-400 hover:bg-sky-50 hover:text-sky-700 active:scale-95";
@@ -527,7 +530,16 @@ export function ViewCube({
               transformOrigin: "center center",
             }}
           >
-            {/* Слой 1 — шесть полных граней, одна заливка; подпись только при hover/focus */}
+            {/* Компенсация det<0 после applyCss3dViewMatrixConvention — иначе грани куба почти все скрыты. */}
+            <div
+              className="relative h-full w-full"
+              style={{
+                transform: "scale3d(-1, 1, 1)",
+                transformStyle: "preserve-3d",
+                transformOrigin: "center center",
+              }}
+            >
+            {/* Слой 1 — шесть полных граней; подписи всегда видны */}
             <button
               type="button"
               title={`Вид: ${LABELS.front}`}
@@ -544,7 +556,7 @@ export function ViewCube({
                 onFaceClick("front");
               }}
             >
-              <FaceLabel face="front" setLabelEl={setLabelEl} className={labelRevealOnHover}>
+              <FaceLabel face="front" setLabelEl={setLabelEl} className={labelEmphasisOnHover}>
                 {LABELS.front}
               </FaceLabel>
             </button>
@@ -564,7 +576,7 @@ export function ViewCube({
                 onFaceClick("back");
               }}
             >
-              <FaceLabel face="back" setLabelEl={setLabelEl} className={labelRevealOnHover}>
+              <FaceLabel face="back" setLabelEl={setLabelEl} className={labelEmphasisOnHover}>
                 {LABELS.back}
               </FaceLabel>
             </button>
@@ -584,7 +596,7 @@ export function ViewCube({
                 onFaceClick("right");
               }}
             >
-              <FaceLabel face="right" setLabelEl={setLabelEl} className={labelRevealOnHover}>
+              <FaceLabel face="right" setLabelEl={setLabelEl} className={labelEmphasisOnHover}>
                 {LABELS.right}
               </FaceLabel>
             </button>
@@ -604,7 +616,7 @@ export function ViewCube({
                 onFaceClick("left");
               }}
             >
-              <FaceLabel face="left" setLabelEl={setLabelEl} className={labelRevealOnHover}>
+              <FaceLabel face="left" setLabelEl={setLabelEl} className={labelEmphasisOnHover}>
                 {LABELS.left}
               </FaceLabel>
             </button>
@@ -624,7 +636,7 @@ export function ViewCube({
                 onFaceClick("top");
               }}
             >
-              <FaceLabel face="top" setLabelEl={setLabelEl} className={labelRevealOnHover}>
+              <FaceLabel face="top" setLabelEl={setLabelEl} className={labelEmphasisOnHover}>
                 {LABELS.top}
               </FaceLabel>
             </button>
@@ -644,7 +656,7 @@ export function ViewCube({
                 onFaceClick("bottom");
               }}
             >
-              <FaceLabel face="bottom" setLabelEl={setLabelEl} className={labelRevealOnHover}>
+              <FaceLabel face="bottom" setLabelEl={setLabelEl} className={labelEmphasisOnHover}>
                 {LABELS.bottom}
               </FaceLabel>
             </button>
@@ -686,6 +698,7 @@ export function ViewCube({
                 onPick={() => onCornerClick([sx, sy, sz])}
               />
             ))}
+            </div>
           </div>
         </div>
       </div>
