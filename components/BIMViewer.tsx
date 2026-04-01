@@ -61,6 +61,158 @@ function readIfcText(raw: unknown): string | null {
   return null;
 }
 
+/** Скаляр из атрибутов Fragments / IFC для панели свойств. */
+function fragmentsValueToDisplay(value: unknown): string | number | boolean | null {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "object" && "value" in (value as Record<string, unknown>)) {
+    return fragmentsValueToDisplay((value as { value?: unknown }).value);
+  }
+  if (Array.isArray(value)) return `Массив(${value.length})`;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * Полный граф свойств IFC через ThatOpen Fragments (как в IDS Property facet).
+ * Без этого getItemsData отдаёт только встроенные поля (_category, _guid, …).
+ */
+const FRAGMENTS_ITEM_DATA_PSETS = {
+  attributesDefault: true,
+  relations: {
+    IsDefinedBy: { attributes: true, relations: true },
+    IsTypedBy: { attributes: true, relations: false },
+    HasPropertySets: { attributes: true, relations: true },
+    DefinesOcurrence: { attributes: false, relations: false },
+  },
+  relationsDefault: { attributes: false, relations: false },
+} as const;
+
+function ifcPropertyValueKey(entity: Record<string, unknown>): string | undefined {
+  return Object.keys(entity).find((k) => /Value/.test(k) || /Values/.test(k));
+}
+
+function ifcPropertyListName(definition: Record<string, unknown>): string | undefined {
+  const cat = definition._category;
+  if (!cat || typeof cat !== "object" || !("value" in cat)) return undefined;
+  const v = (cat as { value: unknown }).value;
+  if (v === "IFCPROPERTYSET") return "HasProperties";
+  if (v === "IFCPROPERTYSETDEFINITIONSET") return "HasProperties";
+  if (v === "IFCELEMENTQUANTITY") return "Quantities";
+  return undefined;
+}
+
+function ifcExtractPropertyOrQuantityValue(entity: Record<string, unknown>): string | number | boolean | null {
+  const vk = ifcPropertyValueKey(entity);
+  if (!vk) return null;
+  const attr = entity[vk];
+  if (!attr || typeof attr !== "object" || !("value" in attr)) return null;
+  return fragmentsValueToDisplay((attr as { value: unknown }).value);
+}
+
+function ifcGetTypePropertySetTemplates(item: Record<string, unknown>): unknown[] {
+  const typedBy = item.IsTypedBy;
+  if (!Array.isArray(typedBy) || typedBy.length === 0) return [];
+  const t0 = typedBy[0] as Record<string, unknown>;
+  const hps = t0.HasPropertySets;
+  return Array.isArray(hps) ? hps : [];
+}
+
+/** Слияние свойств из шаблона типа (HasPropertySets) в экземпляр набора, как в @thatopen/components getPsets. */
+function ifcMergeTypePropsIntoDefinitionList(
+  definition: Record<string, unknown>,
+  listName: string,
+  typeTemplates: unknown[]
+): Record<string, unknown>[] {
+  const raw = definition[listName];
+  const list = Array.isArray(raw) ? [...(raw as Record<string, unknown>[])] : [];
+  const defName =
+    definition.Name && typeof definition.Name === "object" && "value" in definition.Name
+      ? String((definition.Name as { value: unknown }).value)
+      : "";
+  if (!defName) return list;
+  const typeSet = typeTemplates.find((s) => {
+    const set = s as Record<string, unknown>;
+    return (
+      set.Name &&
+      typeof set.Name === "object" &&
+      "value" in set.Name &&
+      String((set.Name as { value: unknown }).value) === defName
+    );
+  }) as Record<string, unknown> | undefined;
+  if (!typeSet || !Array.isArray(typeSet.HasProperties)) return list;
+  for (const prop of typeSet.HasProperties as Record<string, unknown>[]) {
+    const pn =
+      prop.Name && typeof prop.Name === "object" && "value" in prop.Name
+        ? String((prop.Name as { value: unknown }).value)
+        : "";
+    if (!pn) continue;
+    const exists = list.some(
+      (p) =>
+        p.Name &&
+        typeof p.Name === "object" &&
+        "value" in p.Name &&
+        String((p.Name as { value: unknown }).value) === pn
+    );
+    if (!exists) list.push(prop);
+  }
+  return list;
+}
+
+/** Плоские атрибуты элемента (без массивов связей). */
+function ifcCollectFlatAttributes(item: Record<string, unknown>): PropertyItem[] {
+  const out: PropertyItem[] = [];
+  for (const [key, val] of Object.entries(item)) {
+    if (key === "expressID" || key === "type") continue;
+    if (Array.isArray(val)) continue;
+    if (val == null || typeof val !== "object") continue;
+    if (!("value" in val)) continue;
+    out.push({ name: key, value: fragmentsValueToDisplay((val as { value: unknown }).value) });
+  }
+  out.sort((a, b) => {
+    const au = a.name.startsWith("_") ? 1 : 0;
+    const bu = b.name.startsWith("_") ? 1 : 0;
+    if (au !== bu) return au - bu;
+    return a.name.localeCompare(b.name, "ru");
+  });
+  return out;
+}
+
+/** Наборы Pset / Qto из IsDefinedBy. */
+function ifcCollectDefinedPropertySets(item: Record<string, unknown>): PropertySet[] {
+  const typeTemplates = ifcGetTypePropertySetTemplates(item);
+  const isDefinedBy = item.IsDefinedBy;
+  if (!Array.isArray(isDefinedBy)) return [];
+  const out: PropertySet[] = [];
+  for (const def of isDefinedBy) {
+    const definition = def as Record<string, unknown>;
+    if (!definition.Name || typeof definition.Name !== "object" || !("value" in definition.Name)) {
+      continue;
+    }
+    const title = String((definition.Name as { value: unknown }).value);
+    const listName = ifcPropertyListName(definition);
+    if (!listName) continue;
+    const merged = ifcMergeTypePropsIntoDefinitionList(definition, listName, typeTemplates);
+    const properties: PropertyItem[] = [];
+    for (const ent of merged) {
+      const baseName =
+        ent.Name && typeof ent.Name === "object" && "value" in ent.Name
+          ? String((ent.Name as { value: unknown }).value)
+          : "";
+      if (!baseName) continue;
+      properties.push({ name: baseName, value: ifcExtractPropertyOrQuantityValue(ent) });
+    }
+    if (properties.length > 0) out.push({ name: title, properties });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  return out;
+}
+
 function webIfcVectorToIds(v: WEBIFC.Vector<number>): number[] {
   const out: number[] = [];
   for (let i = 0; i < v.size(); i++) out.push(v.get(i));
@@ -667,46 +819,18 @@ export default function BIMViewer() {
 
       for (const expressID of ids) {
         try {
-          const items = (await model.getItemsData?.([expressID], {
-            attributesDefault: true,
-            relationsDefault: { attributes: false, relations: false },
-          })) as Array<Record<string, unknown>> | undefined;
+          const items = (await model.getItemsData?.([expressID], FRAGMENTS_ITEM_DATA_PSETS)) as
+            | Array<Record<string, unknown>>
+            | undefined;
           const props = items?.[0];
           if (!props) continue;
 
-          const toPrimitive = (
-            value: unknown
-          ): string | number | boolean | null => {
-            if (value == null) return null;
-            if (
-              typeof value === "string" ||
-              typeof value === "number" ||
-              typeof value === "boolean"
-            ) {
-              return value;
-            }
-            if (typeof value === "object" && "value" in (value as Record<string, unknown>)) {
-              return toPrimitive((value as { value?: unknown }).value);
-            }
-            if (Array.isArray(value)) return `Array(${value.length})`;
-            try {
-              return JSON.stringify(value);
-            } catch {
-              return String(value);
-            }
-          };
-
-          const generalProps: PropertyItem[] = [];
-          for (const [key, val] of Object.entries(props)) {
-            if (key === "expressID" || key === "type") continue;
-            generalProps.push({
-              name: key,
-              value: toPrimitive(val),
-            });
+          const flat = ifcCollectFlatAttributes(props);
+          if (flat.length > 0) {
+            propertySets.push({ name: "Атрибуты элемента", properties: flat });
           }
-          if (generalProps.length > 0) {
-            propertySets.push({ name: "Свойства элемента", properties: generalProps });
-          }
+          const psets = ifcCollectDefinedPropertySets(props);
+          propertySets.push(...psets);
         } catch (_) {
           // element may not have properties
         }

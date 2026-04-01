@@ -31,33 +31,50 @@ export function PropertiesPanel({ properties, onClose, collapsed, isOpen }: Prop
                   Кликните по элементу, чтобы увидеть свойства
                 </p>
               ) : (
-                properties.map((pset) => (
-                  <div key={pset.name} className="mb-4">
+                properties.map((pset, psetIdx) => (
+                  <div key={`${pset.name}-${psetIdx}`} className="mb-4">
                     <div className="mb-1 px-1 text-xs font-semibold text-primary">{pset.name}</div>
                     <div className="overflow-hidden rounded-md border border-white/15 bg-background/40">
-                      {pset.properties.map((prop, i) => (
-                        <div
-                          key={prop.name}
-                          className={`flex text-xs ${
-                            i % 2 === 0 ? "bg-white/5" : "bg-transparent"
-                          }`}
-                        >
-                          <div className="w-2/5 truncate border-r border-white/10 px-2 py-1 font-medium text-muted-foreground">
-                            {prop.name}
-                          </div>
-                          <div className="w-3/5 truncate px-2 py-1 text-foreground">
-                            {prop.value === null ? (
-                              <span className="text-muted-foreground">null</span>
-                            ) : typeof prop.value === "boolean" ? (
-                              <span className={prop.value ? "text-green-600" : "text-red-600"}>
-                                {prop.value ? "Да" : "Нет"}
-                              </span>
-                            ) : (
-                              String(prop.value)
+                      {pset.properties.map((prop, i) => {
+                        const display =
+                          prop.value === null
+                            ? "—"
+                            : typeof prop.value === "boolean"
+                              ? prop.value
+                                ? "Да"
+                                : "Нет"
+                              : String(prop.value);
+                        return (
+                          <div
+                            key={`${pset.name}-${prop.name}-${i}`}
+                            className={cn(
+                              "flex gap-1 text-xs",
+                              i % 2 === 0 ? "bg-white/5" : "bg-transparent"
                             )}
+                          >
+                            <div
+                              className="w-[38%] shrink-0 break-words border-r border-white/10 px-2 py-1 font-medium text-muted-foreground"
+                              title={prop.name}
+                            >
+                              {prop.name}
+                            </div>
+                            <div
+                              className="min-w-0 flex-1 break-words px-2 py-1 text-foreground [overflow-wrap:anywhere]"
+                              title={display}
+                            >
+                              {prop.value === null ? (
+                                <span className="text-muted-foreground">—</span>
+                              ) : typeof prop.value === "boolean" ? (
+                                <span className={prop.value ? "text-green-600" : "text-red-600"}>
+                                  {prop.value ? "Да" : "Нет"}
+                                </span>
+                              ) : (
+                                String(prop.value)
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))
