@@ -1,13 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as OBC from "@thatopen/components";
 import * as OBCF from "@thatopen/components-front";
+import { RenderedFaces } from "@thatopen/fragments";
 import * as THREE from "three";
 import * as WEBIFC from "web-ifc";
 import { ModelTree } from "./ModelTree";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { Toolbar, ViewportToolsPanel } from "./Toolbar";
+import {
+  ViewCube,
+  type ViewCubeCorner,
+  type ViewCubeDirection,
+  type ViewCubeEdge,
+  type ViewCubeStep,
+  getEdgeViewDirectionUnit,
+} from "./ViewCube";
+import { IconX } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { motion, type Transition } from "framer-motion";
 
@@ -27,6 +37,12 @@ const panelHeightTransition: Transition = {
 
 const emptyStateGlass =
   "max-w-md rounded-2xl border border-white/25 bg-background/55 px-10 py-9 shadow-2xl ring-1 ring-white/10 backdrop-blur-xl supports-[backdrop-filter]:bg-background/45";
+
+/** ACES + чуть выше экспозиция — без тяжёлого постпроцесса */
+const SCENE_TONE_EXPOSURE = 1.06;
+
+/** Предпросмотр слоя под курсором (отдельный стиль Highlighter). */
+const LAYER_HOVER_STYLE = "layerHover";
 
 /** Видимая полоска при сворачивании: чуть шире плашки w-3.5 (минимальный зазор) */
 /** Видимая ширина края: плашка w-3.5 + запас под вертикальный текст (~2.125rem) */
@@ -102,6 +118,18 @@ function buildPresentationLayerMaps(api: WEBIFC.IfcAPI, modelID: number) {
   return { repToProduct, defShapeToProduct, productIds, itemToShapeRep };
 }
 
+/** Базис «экранного» вида для шагов влево/вправо/вверх/вниз вокруг цели орбиты. */
+function getViewBasisFromOrbit(pos: THREE.Vector3, target: THREE.Vector3) {
+  const forward = target.clone().sub(pos).normalize();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  let right = new THREE.Vector3().crossVectors(worldUp, forward).normalize();
+  if (right.lengthSq() < 1e-8) {
+    right.set(1, 0, 0);
+  }
+  const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+  return { forward, right, up };
+}
+
 function resolveAssignedToProductId(
   api: WEBIFC.IfcAPI,
   modelID: number,
@@ -153,6 +181,17 @@ export interface TreeNode {
 type LayerIdsByName = Record<string, number[]>;
 type LayerVisibilityByName = Record<string, boolean>;
 
+/** Первый слой IFC, в котором встречается product id (для клика по модели → слой). */
+function getLayerNameForProductId(
+  layers: LayerIdsByName,
+  productId: number
+): string | null {
+  for (const [name, ids] of Object.entries(layers)) {
+    if (ids.includes(productId)) return name;
+  }
+  return null;
+}
+
 export default function BIMViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const componentsRef = useRef<OBC.Components | null>(null);
@@ -169,9 +208,25 @@ export default function BIMViewer() {
   const activeToolRef = useRef<"none" | "measure" | "clip">("none");
   const selectStyleNameRef = useRef<string>("select");
   const fragmentsInitializedRef = useRef(false);
+  /** Разрешается после успешного fragments.init(); await перед load IFC и перед любым core.update. */
+  const fragmentsInitPromiseRef = useRef<Promise<void> | null>(null);
   const webIfcModelIdRef = useRef<number | null>(null);
   const lastFragmentsModelRef = useRef<any>(null);
   const rebuildTreeRef = useRef<(() => Promise<void>) | null>(null);
+  const layerIdsByNameRef = useRef<LayerIdsByName>({});
+  const handleLayerRowSelectRef = useRef<
+    (layerName: string, additive?: boolean) => Promise<void>
+  >(async () => {});
+  /** Последний выбранный express id (для Tab → выделить слой). */
+  const lastPickedExpressIdRef = useRef<number | null>(null);
+  const layerHoverSeqRef = useRef(0);
+  const worldGridRef = useRef<OBC.SimpleGrid | null>(null);
+  /** ЛКМ: старт координат; после drag (орбита камеры) click не обрабатываем как выбор. */
+  const orbitPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  const orbitDragActiveRef = useRef(false);
+  const skipNextCanvasClickRef = useRef(false);
+  /** Снять window-listeners орбиты при unmount / смене жеста. */
+  const orbitWindowListenersCleanupRef = useRef<(() => void) | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [modelLoaded, setModelLoaded] = useState(false);
@@ -185,8 +240,16 @@ export default function BIMViewer() {
   const [propertiesPeekHover, setPropertiesPeekHover] = useState(false);
   const [layerIdsByName, setLayerIdsByName] = useState<LayerIdsByName>({});
   const [layerVisibilityByName, setLayerVisibilityByName] = useState<LayerVisibilityByName>({});
-  /** Активный слой в дереве (подсветка в сцене через Highlighter). */
-  const [selectedLayerName, setSelectedLayerName] = useState<string | null>(null);
+  /** Выбранные слои IFC (множественный выбор: Shift+клик по слою). */
+  const [selectedLayerNames, setSelectedLayerNames] = useState<string[]>([]);
+  /** Подпись IFC-слоя под курсором (строка состояния). */
+  const [hoverLayerLabel, setHoverLayerLabel] = useState<string | null>(null);
+  /** Текст про текущее выделение (слои / счётчик элементов). */
+  const [selectionCaption, setSelectionCaption] = useState("");
+  /** Сброс пересчёта подписи выбора после highlight вне React state. */
+  const [selectionSyncTick, setSelectionSyncTick] = useState(0);
+  /** Скрытие всего кроме выделения (Highlighter); снимается той же кнопкой или сбросом выделения. */
+  const [isolateSelectionActive, setIsolateSelectionActive] = useState(false);
 
   useEffect(() => {
     if (showTree) setTreePeekHover(false);
@@ -200,6 +263,48 @@ export default function BIMViewer() {
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
+
+  useEffect(() => {
+    layerIdsByNameRef.current = layerIdsByName;
+  }, [layerIdsByName]);
+
+  useEffect(() => {
+    const h = highlighterRef.current;
+    const sn = selectStyleNameRef.current;
+    if (!modelLoaded || !h) {
+      setSelectionCaption("");
+      return;
+    }
+    if (selectedLayerNames.length > 1) {
+      setSelectionCaption(`Выбрано слоёв: ${selectedLayerNames.length}`);
+      return;
+    }
+    if (selectedLayerNames.length === 1) {
+      setSelectionCaption(`Слой: ${selectedLayerNames[0]}`);
+      return;
+    }
+    const sel = sn ? h.selection[sn] : undefined;
+    if (!sel) {
+      setSelectionCaption("");
+      return;
+    }
+    let n = 0;
+    for (const s of Object.values(sel)) n += s.size;
+    if (n > 1) setSelectionCaption(`Выбрано элементов: ${n}`);
+    else if (n === 1) setSelectionCaption("1 элемент");
+    else setSelectionCaption("");
+  }, [selectedLayerNames, selectionSyncTick, modelLoaded]);
+
+  const isolateSelectionCount = useMemo(() => {
+    const h = highlighterRef.current;
+    if (!h || !modelLoaded) return 0;
+    const sn = selectStyleNameRef.current;
+    const sel = sn ? (h.selection[sn] as Record<string, Set<number>> | undefined) : undefined;
+    if (!sel) return 0;
+    let n = 0;
+    for (const s of Object.values(sel)) n += s.size;
+    return n;
+  }, [selectionSyncTick, modelLoaded]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -242,35 +347,62 @@ export default function BIMViewer() {
 
     components.init();
     world.camera.controls.setLookAt(12, 6, 8, 0, 0, -10);
-    world.scene.setup();
-    // Светлый фон сцены в тон светлому UI
-    world.scene.three.background = new THREE.Color(0xf4f4f5);
+    // Белый фон вьюпорта (дефолт SimpleScene — тёмно-серый 0x202022)
+    world.scene.setup({
+      backgroundColor: new THREE.Color(0xffffff),
+    });
+    // setup() добавляет свои ambient/directional — ниже ставим свои значения без дубля
+    world.scene.deleteAllLights();
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-    world.scene.three.add(ambientLight);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-    dirLight.position.set(10, 20, 10);
-    world.scene.three.add(dirLight);
+    const gl = world.renderer.three;
+    gl.toneMapping = THREE.ACESFilmicToneMapping;
+    gl.toneMappingExposure = SCENE_TONE_EXPOSURE;
+    gl.outputColorSpace = THREE.SRGBColorSpace;
+
+    const scene3 = world.scene.three;
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.28);
+    scene3.add(ambientLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xeef3ff, 0xe5e0d8, 0.42);
+    hemiLight.position.set(0, 1, 0);
+    scene3.add(hemiLight);
+
+    const keyLight = new THREE.DirectionalLight(0xfff8f0, 1.18);
+    keyLight.position.set(18, 32, 14);
+    scene3.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0xc8d4ea, 0.4);
+    fillLight.position.set(-16, 12, -20);
+    scene3.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.22);
+    rimLight.position.set(-6, 8, 28);
+    scene3.add(rimLight);
 
     const grids = components.get(OBC.Grids);
-    grids.create(world);
+    const worldGrid = grids.create(world);
+    worldGridRef.current = worldGrid;
+    worldGrid.fade = true;
 
     const fragments = components.get(OBC.FragmentsManager);
     fragmentsRef.current = fragments;
     fragmentsInitializedRef.current = false;
-    void (async () => {
-      try {
-        await fragments.init("/thatopen-worker.mjs");
+    fragmentsInitPromiseRef.current = Promise.resolve(
+      fragments.init("/thatopen-worker.mjs") as unknown as Promise<void>
+    )
+      .then(() => {
         fragmentsInitializedRef.current = true;
-      } catch (error) {
+      })
+      .catch((error: unknown) => {
         console.error("Failed to initialize fragments manager:", error);
-      }
-    })();
+        fragmentsInitializedRef.current = false;
+        throw error;
+      });
 
     const ifcLoader = components.get(OBC.IfcLoader);
     ifcLoaderRef.current = ifcLoader;
 
-    // Raycaster (required for clipper)
+    // Raycaster (required for clipper + hover слоя)
     const casters = components.get(OBC.Raycasters);
     casters.get(world);
 
@@ -280,7 +412,21 @@ export default function BIMViewer() {
       world,
       selectName: "select",
       autoHighlightOnClick: false,
-      selectionColor: new THREE.Color(0x4f46e5),
+      selectMaterialDefinition: {
+        color: new THREE.Color(0xe11d48),
+        renderedFaces: RenderedFaces.TWO,
+        opacity: 1,
+        transparent: false,
+      },
+    });
+    // Предпросмотр слоя: заметный тинт, «розовый прикол» (бледно-розовый / rose).
+    highlighter.styles.set(LAYER_HOVER_STYLE, {
+      color: new THREE.Color(0xf472b6),
+      renderedFaces: RenderedFaces.TWO,
+      opacity: 0.52,
+      transparent: true,
+      preserveOriginalMaterial: false,
+      depthWrite: false,
     });
     selectStyleNameRef.current = highlighter.config.selectName;
     highlighterRef.current = highlighter;
@@ -299,7 +445,54 @@ export default function BIMViewer() {
     measurer.rounding = 2;
     measurerRef.current = measurer;
 
-    const handleClick = async () => {
+    // Орбита: движение зажатой ЛКМ (не только down→up), иначе click после отпускания снова сбрасывает выбор.
+    const ORBIT_DRAG_PX_SQ = 5 * 5;
+
+    const onOrbitPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      orbitWindowListenersCleanupRef.current?.();
+      orbitPointerDownRef.current = { x: e.clientX, y: e.clientY };
+      orbitDragActiveRef.current = false;
+
+      const onWindowMove = (ev: PointerEvent) => {
+        if ((ev.buttons & 1) === 0) return;
+        const start = orbitPointerDownRef.current;
+        if (!start) return;
+        const dx = ev.clientX - start.x;
+        const dy = ev.clientY - start.y;
+        if (dx * dx + dy * dy > ORBIT_DRAG_PX_SQ) {
+          orbitDragActiveRef.current = true;
+        }
+      };
+
+      const onWindowUp = (ev: PointerEvent) => {
+        if (ev.button !== 0) return;
+        window.removeEventListener("pointermove", onWindowMove, true);
+        window.removeEventListener("pointerup", onWindowUp, true);
+        window.removeEventListener("pointercancel", onWindowUp, true);
+        orbitWindowListenersCleanupRef.current = null;
+        if (orbitDragActiveRef.current) {
+          skipNextCanvasClickRef.current = true;
+        }
+        orbitDragActiveRef.current = false;
+        orbitPointerDownRef.current = null;
+      };
+
+      window.addEventListener("pointermove", onWindowMove, true);
+      window.addEventListener("pointerup", onWindowUp, true);
+      window.addEventListener("pointercancel", onWindowUp, true);
+      orbitWindowListenersCleanupRef.current = () => {
+        window.removeEventListener("pointermove", onWindowMove, true);
+        window.removeEventListener("pointerup", onWindowUp, true);
+        window.removeEventListener("pointercancel", onWindowUp, true);
+      };
+    };
+
+    const handleClick = async (e: MouseEvent) => {
+      if (skipNextCanvasClickRef.current) {
+        skipNextCanvasClickRef.current = false;
+        return;
+      }
       if (!fragmentsInitializedRef.current) return;
       const tool = activeToolRef.current;
       if (tool === "clip") {
@@ -310,31 +503,111 @@ export default function BIMViewer() {
         return;
       }
       try {
+        await highlighter.clear(LAYER_HOVER_STYLE);
         const selectName = selectStyleNameRef.current;
-        await highlighter.highlight(selectName, true);
-        const selection = highlighter.selection[selectName];
-        if (!selection || Object.keys(selection).length === 0) {
-          setSelectedProperties([]);
-          setSelectedLayerName(null);
+        const canvas = world.renderer?.three.domElement;
+        const camera = world.camera?.three;
+        if (!canvas || !camera) return;
+        // Raycast с явными clientX/clientY: SimpleRaycaster.castRay для фрагментов берёт mouse из
+        // внутреннего трекера (последнее событие на canvas) и может расходиться с переданным NDC — hover ломался.
+        const hit = await fragments.raycast({
+          camera,
+          dom: canvas,
+          mouse: new THREE.Vector2(e.clientX, e.clientY),
+        });
+        if (!hit?.localId) {
+          // Клик в пустоту не снимает выделение — только кнопка «Сбросить выделение» или новый выбор.
+          await fragments.core.update(true);
           return;
         }
-        setSelectedLayerName(null);
+
+        const localId = hit.localId;
+        lastPickedExpressIdRef.current = localId;
+        const modelId = hit.fragments.modelId;
+        const singleMap: OBC.ModelIdMap = { [modelId]: new Set([localId]) };
+
+        const layers = layerIdsByNameRef.current;
+        const layerName = getLayerNameForProductId(layers, localId);
+
+        // Ctrl — один элемент (замена). Ctrl+Shift — тот же один элемент, но добавить к уже выбранным.
+        if (e.ctrlKey && e.shiftKey) {
+          setSelectedLayerNames([]);
+          setShowProperties(true);
+          await highlighter.highlightByID(selectName, singleMap, false, false, null, false);
+          await fragments.core.update(true);
+          const sel = highlighter.selection[selectName];
+          if (sel && Object.keys(sel).length > 0) {
+            await loadProperties(components, sel as Record<string, Set<number>>);
+          }
+          return;
+        }
+
+        if (e.ctrlKey) {
+          setSelectedLayerNames([]);
+          setShowProperties(true);
+          await highlighter.highlightByID(selectName, singleMap, true, false, null, false);
+          await fragments.core.update(true);
+          await loadProperties(components, singleMap);
+          return;
+        }
+
+        if (layerName && (layers[layerName]?.length ?? 0) > 0) {
+          const map: OBC.ModelIdMap = {
+            [modelId]: new Set(layers[layerName]),
+          };
+          const additive = e.shiftKey;
+          await highlighter.highlightByID(selectName, map, !additive, false, null, false);
+          await fragments.core.update(true);
+          if (additive) {
+            setSelectedLayerNames((prev) =>
+              prev.includes(layerName) ? prev : [...prev, layerName]
+            );
+          } else {
+            setSelectedLayerNames([layerName]);
+          }
+          setSelectedProperties([]);
+          setShowProperties(false);
+          setShowTree(true);
+          return;
+        }
+
+        setSelectedLayerNames([]);
         setShowProperties(true);
-        await loadProperties(components, selection);
+        await highlighter.highlightByID(selectName, singleMap, true, false, null, false);
+        await fragments.core.update(true);
+        await loadProperties(components, singleMap);
       } catch (error) {
-        // Avoid unhandled promise rejections from picker/highlighter internals.
         console.warn("Selection interaction failed:", error);
         setSelectedProperties([]);
+      } finally {
+        setSelectionSyncTick((t) => t + 1);
       }
     };
 
     const handleDblClick = () => {
+      if (skipNextCanvasClickRef.current) {
+        skipNextCanvasClickRef.current = false;
+        return;
+      }
       if (activeToolRef.current === "measure") {
         measurer.create();
       }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Tab" && activeToolRef.current === "none") {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest?.("input, textarea, [contenteditable=true]")) return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        const id = lastPickedExpressIdRef.current;
+        if (id == null) return;
+        const name = getLayerNameForProductId(layerIdsByNameRef.current, id);
+        if (name == null) return;
+        e.preventDefault();
+        setShowTree(true);
+        void handleLayerRowSelectRef.current(name, false);
+        return;
+      }
       if (e.code === "Delete" || e.code === "Backspace") {
         const tool = activeToolRef.current;
         if (tool === "measure") measurer.delete();
@@ -342,13 +615,21 @@ export default function BIMViewer() {
       }
     };
 
+    containerRef.current.addEventListener("pointerdown", onOrbitPointerDown, true);
     containerRef.current.addEventListener("click", handleClick);
     containerRef.current.addEventListener("dblclick", handleDblClick);
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
+      const fragmentsWasReady = fragmentsInitializedRef.current;
+      fragmentsInitializedRef.current = false;
+      orbitWindowListenersCleanupRef.current?.();
+      orbitWindowListenersCleanupRef.current = null;
+      containerRef.current?.removeEventListener("pointerdown", onOrbitPointerDown, true);
+      containerRef.current?.removeEventListener("click", handleClick);
+      containerRef.current?.removeEventListener("dblclick", handleDblClick);
       window.removeEventListener("keydown", handleKeyDown);
-      if (fragmentsInitializedRef.current) {
+      if (fragmentsWasReady) {
         components.dispose();
         return;
       }
@@ -447,6 +728,16 @@ export default function BIMViewer() {
       setModelName(file.name);
 
       try {
+        const initP = fragmentsInitPromiseRef.current;
+        if (initP) await initP;
+      } catch {
+        console.error("FragmentsManager не инициализирован, загрузка IFC отменена.");
+        setIsLoading(false);
+        e.target.value = "";
+        return;
+      }
+
+      try {
         await ifcLoaderRef.current.setup({
           autoSetWasm: false,
           wasm: {
@@ -455,9 +746,10 @@ export default function BIMViewer() {
           },
         });
 
-        worldRef.current.camera.controls.addEventListener("update", () =>
-          fragmentsRef.current?.core.update()
-        );
+        worldRef.current.camera.controls.addEventListener("update", () => {
+          if (!fragmentsInitializedRef.current) return;
+          void fragmentsRef.current?.core.update();
+        });
 
         fragmentsRef.current.list.onItemSet.add(async ({ value: model }: { value: any }) => {
           model.useCamera(worldRef.current!.camera.three);
@@ -588,7 +880,7 @@ export default function BIMViewer() {
       if (roots.length === 0) {
         setLayerIdsByName({});
         setLayerVisibilityByName({});
-        setSelectedLayerName(null);
+        setSelectedLayerNames([]);
         setTreeData([
           {
             expressID: -1,
@@ -607,15 +899,15 @@ export default function BIMViewer() {
         }
         return next;
       });
-      setSelectedLayerName((prev) =>
-        prev != null && prev in nextLayerIdsByName ? prev : null
+      setSelectedLayerNames((prev) =>
+        prev.filter((name) => name in nextLayerIdsByName)
       );
       setTreeData(roots);
     } catch (error) {
       console.warn("Failed to build layers tree from IFC:", error);
       setLayerIdsByName({});
       setLayerVisibilityByName({});
-      setSelectedLayerName(null);
+      setSelectedLayerNames([]);
       setTreeData([
         {
           expressID: -1,
@@ -635,7 +927,7 @@ export default function BIMViewer() {
     if (api != null && mid != null) {
       await buildLayersTree(model, api, mid);
     } else {
-      setSelectedLayerName(null);
+      setSelectedLayerNames([]);
       setTreeData([
         {
           expressID: -1,
@@ -655,9 +947,15 @@ export default function BIMViewer() {
   const setItemsVisibility = useCallback(async (ids: number[], visible: boolean) => {
     const model = lastFragmentsModelRef.current;
     const fragments = fragmentsRef.current;
-    if (!model || !fragments || ids.length === 0) return;
+    if (!model || !fragments || ids.length === 0 || !fragmentsInitializedRef.current) return;
     await model.setVisible(ids, visible);
     await fragments.core.update(true);
+    try {
+      await highlighterRef.current?.clear(LAYER_HOVER_STYLE);
+      await fragments.core.update(true);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const handleToggleAllLayersVisibility = useCallback(async () => {
@@ -690,28 +988,174 @@ export default function BIMViewer() {
     Object.keys(layerIdsByName).length > 0 &&
     Object.keys(layerIdsByName).every((name) => layerVisibilityByName[name] !== false);
 
+  // Сетка основания (ground): при частично скрытых слоях убираем, чтобы не было «пола» на пустом фоне.
+  useEffect(() => {
+    const grid = worldGridRef.current;
+    if (!grid) return;
+    const names = Object.keys(layerIdsByName);
+    if (names.length === 0) {
+      grid.visible = true;
+      return;
+    }
+    const anyHidden = names.some((name) => layerVisibilityByName[name] === false);
+    grid.visible = !anyHidden;
+  }, [layerIdsByName, layerVisibilityByName]);
+
   const handleLayerRowSelect = useCallback(
-    async (layerName: string) => {
+    async (layerName: string, additive = false) => {
       const model = lastFragmentsModelRef.current;
       const highlighter = highlighterRef.current;
       const fragments = fragmentsRef.current;
       if (!model || !highlighter || !fragments) return;
       const ids = layerIdsByName[layerName];
       if (!ids?.length) return;
-      setSelectedLayerName(layerName);
       setSelectedProperties([]);
       setShowProperties(false);
       const selectName = selectStyleNameRef.current;
       const map: OBC.ModelIdMap = { [model.modelId]: new Set(ids) };
       try {
-        await highlighter.highlightByID(selectName, map, true, false, null, false);
+        await highlighter.highlightByID(selectName, map, !additive, false, null, false);
         await fragments.core.update(true);
+        if (additive) {
+          setSelectedLayerNames((prev) =>
+            prev.includes(layerName) ? prev : [...prev, layerName]
+          );
+        } else {
+          setSelectedLayerNames([layerName]);
+        }
       } catch (e) {
         console.warn("Подсветка слоя не удалась:", e);
+      } finally {
+        setSelectionSyncTick((t) => t + 1);
       }
     },
     [layerIdsByName]
   );
+
+  useEffect(() => {
+    handleLayerRowSelectRef.current = handleLayerRowSelect;
+  }, [handleLayerRowSelect]);
+
+  // Предпросмотр под курсором: без Ctrl — весь слой IFC; с Ctrl — один элемент (как выбор с Ctrl).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !modelLoaded) return;
+
+    const clearHoverHighlight = async () => {
+      const h = highlighterRef.current;
+      const fr = fragmentsRef.current;
+      if (!h || !fr || !fragmentsInitializedRef.current) return;
+      try {
+        await h.clear(LAYER_HOVER_STYLE);
+        await fr.core.update(true);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    let raf = 0;
+    const runHover = async (clientX: number, clientY: number, ctrlKey: boolean) => {
+      if (activeToolRef.current !== "none") {
+        setHoverLayerLabel(null);
+        await clearHoverHighlight();
+        return;
+      }
+      if (!fragmentsInitializedRef.current) return;
+
+      const seq = ++layerHoverSeqRef.current;
+      const canvas = worldRef.current?.renderer?.three.domElement;
+      const camera = worldRef.current?.camera?.three;
+      const model = lastFragmentsModelRef.current;
+      const h = highlighterRef.current;
+      const fr = fragmentsRef.current;
+      if (!canvas || !camera || !model || !h || !fr) return;
+
+      const hit = await fr.raycast({
+        camera,
+        dom: canvas,
+        mouse: new THREE.Vector2(clientX, clientY),
+      });
+      if (seq !== layerHoverSeqRef.current) return;
+
+      if (
+        !hit ||
+        typeof hit !== "object" ||
+        !("localId" in hit) ||
+        typeof (hit as { localId: unknown }).localId !== "number"
+      ) {
+        setHoverLayerLabel(null);
+        await clearHoverHighlight();
+        return;
+      }
+
+      const localId = (hit as { localId: number }).localId;
+      const layers = layerIdsByNameRef.current;
+      const ifcLayerName = getLayerNameForProductId(layers, localId);
+      setHoverLayerLabel(ifcLayerName ?? "IFC-слой не назначен");
+
+      // Один элемент под курсором только в режиме Ctrl (в т.ч. с Shift — добавление к выбору).
+      if (ctrlKey) {
+        const map: OBC.ModelIdMap = { [model.modelId]: new Set([localId]) };
+        try {
+          await h.highlightByID(LAYER_HOVER_STYLE, map, true, false, null, false);
+          if (seq !== layerHoverSeqRef.current) return;
+          await fr.core.update(true);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
+      const layerName = ifcLayerName;
+      if (!layerName || !(layers[layerName]?.length)) {
+        await clearHoverHighlight();
+        return;
+      }
+
+      const ids = layers[layerName];
+      const map: OBC.ModelIdMap = { [model.modelId]: new Set(ids) };
+      try {
+        await h.highlightByID(LAYER_HOVER_STYLE, map, true, false, null, false);
+        if (seq !== layerHoverSeqRef.current) return;
+        await fr.core.update(true);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        void runHover(e.clientX, e.clientY, e.ctrlKey);
+      });
+    };
+
+    const onLeave = () => {
+      cancelAnimationFrame(raf);
+      layerHoverSeqRef.current += 1;
+      setHoverLayerLabel(null);
+      void clearHoverHighlight();
+    };
+
+    const onPointerDown = () => {
+      layerHoverSeqRef.current += 1;
+      setHoverLayerLabel(null);
+      void clearHoverHighlight();
+    };
+
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", onLeave);
+    el.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", onLeave);
+      el.removeEventListener("pointerdown", onPointerDown, true);
+      setHoverLayerLabel(null);
+      void clearHoverHighlight();
+    };
+  }, [modelLoaded, activeTool]);
 
   const handleFitAll = useCallback(() => {
     if (!worldRef.current || !fragmentsRef.current) return;
@@ -733,6 +1177,225 @@ export default function BIMViewer() {
     );
   }, []);
 
+  const restoreVisibilityAfterIsolation = useCallback(async () => {
+    const model = lastFragmentsModelRef.current;
+    const fragments = fragmentsRef.current;
+    if (!model || !fragments) return;
+    try {
+      if (typeof model.resetVisible === "function") {
+        model.resetVisible();
+      } else {
+        const ids = typeof model.getLocalIds === "function" ? model.getLocalIds() : [];
+        if (ids.length) await model.setVisible(ids, true);
+      }
+      await fragments.core.update(true);
+      const names = Object.keys(layerIdsByName);
+      for (const name of names) {
+        const ids = layerIdsByName[name] ?? [];
+        if (ids.length === 0) continue;
+        const vis = layerVisibilityByName[name] !== false;
+        await model.setVisible(ids, vis);
+      }
+      await fragments.core.update(true);
+      await highlighterRef.current?.clear(LAYER_HOVER_STYLE);
+      await fragments.core.update(true);
+    } catch {
+      /* ignore */
+    }
+  }, [layerIdsByName, layerVisibilityByName]);
+
+  const handleToggleIsolateSelection = useCallback(async () => {
+    const model = lastFragmentsModelRef.current;
+    const fragments = fragmentsRef.current;
+    const highlighter = highlighterRef.current;
+    const world = worldRef.current;
+    if (!model || !fragments || !highlighter || !world) return;
+
+    if (isolateSelectionActive) {
+      await restoreVisibilityAfterIsolation();
+      setIsolateSelectionActive(false);
+      handleFitAll();
+      return;
+    }
+
+    const sn = selectStyleNameRef.current;
+    const sel = highlighter.selection[sn] as Record<string, Set<number>> | undefined;
+    if (!sel) return;
+    let total = 0;
+    for (const s of Object.values(sel)) total += s.size;
+    if (total === 0) return;
+
+    let allIds: number[] = [];
+    try {
+      const raw =
+        typeof model.getLocalIds === "function" ? model.getLocalIds() : undefined;
+      let resolved: unknown = raw;
+      if (raw != null && typeof (raw as Promise<unknown>).then === "function") {
+        resolved = await (raw as Promise<unknown>);
+      }
+      if (Array.isArray(resolved)) {
+        allIds = resolved as number[];
+      } else if (resolved != null && typeof (resolved as Iterable<number>)[Symbol.iterator] === "function") {
+        allIds = Array.from(resolved as Iterable<number>);
+      }
+    } catch {
+      /* ignore */
+    }
+    if (allIds.length === 0) {
+      allIds = Array.from(new Set(Object.values(layerIdsByName).flat()));
+    }
+    const selectedSet = new Set<number>();
+    for (const set of Object.values(sel)) {
+      for (const id of set) selectedSet.add(id);
+    }
+    const toHide = allIds.filter((id) => !selectedSet.has(id));
+    if (toHide.length) await model.setVisible(toHide, false);
+    await model.setVisible([...selectedSet], true);
+    await fragments.core.update(true);
+
+    const modelIdMap: OBC.ModelIdMap = {};
+    for (const [mid, ids] of Object.entries(sel)) {
+      modelIdMap[mid] = new Set(ids);
+    }
+    try {
+      const boxes = await fragments.getBBoxes(modelIdMap);
+      const union = new THREE.Box3();
+      for (const b of boxes) {
+        if (b && !b.isEmpty()) union.union(b);
+      }
+      if (!union.isEmpty()) {
+        const center = union.getCenter(new THREE.Vector3());
+        const size = union.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z, 1e-6);
+        await world.camera.controls.setLookAt(
+          center.x + maxDim,
+          center.y + maxDim * 0.8,
+          center.z + maxDim,
+          center.x,
+          center.y,
+          center.z,
+          true
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+    setIsolateSelectionActive(true);
+  }, [
+    isolateSelectionActive,
+    restoreVisibilityAfterIsolation,
+    layerIdsByName,
+    handleFitAll,
+  ]);
+
+  /** Стандартные виды относительно текущей цели орбиты (Y вверх, «спереди» = +Z). */
+  const handleViewCubeFace = useCallback(async (dir: ViewCubeDirection) => {
+    const world = worldRef.current;
+    const controls = world?.camera?.controls;
+    if (!controls) return;
+    const target = new THREE.Vector3();
+    const pos = new THREE.Vector3();
+    controls.getTarget(target, true);
+    controls.getPosition(pos, true);
+    const distance = Math.max(pos.distanceTo(target), 0.5);
+    const eye = target.clone();
+    switch (dir) {
+      case "top":
+        eye.add(new THREE.Vector3(0, distance, 0));
+        break;
+      case "bottom":
+        eye.add(new THREE.Vector3(0, -distance, 0));
+        break;
+      case "front":
+        eye.add(new THREE.Vector3(0, 0, distance));
+        break;
+      case "back":
+        eye.add(new THREE.Vector3(0, 0, -distance));
+        break;
+      case "right":
+        eye.add(new THREE.Vector3(distance, 0, 0));
+        break;
+      case "left":
+        eye.add(new THREE.Vector3(-distance, 0, 0));
+        break;
+    }
+    await controls.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, true);
+  }, []);
+
+  /** Изометрические виды: камера в октанте вершины (sx,sy,sz), совпадает с геометрией гизмо. */
+  const handleViewCubeCorner = useCallback(async (corner: ViewCubeCorner) => {
+    const controls = worldRef.current?.camera?.controls;
+    if (!controls) return;
+    const [sx, sy, sz] = corner;
+    const target = new THREE.Vector3();
+    const pos = new THREE.Vector3();
+    controls.getTarget(target, true);
+    controls.getPosition(pos, true);
+    const distance = Math.max(pos.distanceTo(target), 0.5);
+    const dir = new THREE.Vector3(sx, sy, sz).normalize();
+    const eye = target.clone().add(dir.multiplyScalar(distance));
+    await controls.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, true);
+  }, []);
+
+  /** Вид с ребра: биссектриса двух граней (как Top Front на схеме ViewCube). */
+  const handleViewCubeEdge = useCallback(async (edge: ViewCubeEdge) => {
+    const controls = worldRef.current?.camera?.controls;
+    if (!controls) return;
+    const target = new THREE.Vector3();
+    const pos = new THREE.Vector3();
+    controls.getTarget(target, true);
+    controls.getPosition(pos, true);
+    const distance = Math.max(pos.distanceTo(target), 0.5);
+    const dir = getEdgeViewDirectionUnit(edge).multiplyScalar(distance);
+    const eye = target.clone().add(dir);
+    await controls.setLookAt(eye.x, eye.y, eye.z, target.x, target.y, target.z, true);
+  }, []);
+
+  /** Поворот на 90° вокруг «верха» и «вправо» текущего вида (относительно экрана). */
+  const handleViewCubeStep = useCallback(async (step: ViewCubeStep) => {
+    const controls = worldRef.current?.camera?.controls;
+    if (!controls) return;
+    const target = new THREE.Vector3();
+    const pos = new THREE.Vector3();
+    controls.getTarget(target, true);
+    controls.getPosition(pos, true);
+    const offset = pos.clone().sub(target);
+    const { right, up } = getViewBasisFromOrbit(pos, target);
+    const quarter = Math.PI / 2;
+    switch (step) {
+      case "right":
+        offset.applyAxisAngle(up, quarter);
+        break;
+      case "left":
+        offset.applyAxisAngle(up, -quarter);
+        break;
+      case "up":
+        offset.applyAxisAngle(right, quarter);
+        break;
+      case "down":
+        offset.applyAxisAngle(right, -quarter);
+        break;
+    }
+    const newPos = target.clone().add(offset);
+    await controls.setLookAt(newPos.x, newPos.y, newPos.z, target.x, target.y, target.z, true);
+  }, []);
+
+  const handleViewOrbitDrag = useCallback((dx: number, dy: number) => {
+    const c = worldRef.current?.camera?.controls;
+    if (!c) return;
+    void c.rotate(-dx * 0.0035, -dy * 0.0035, false);
+  }, []);
+
+  const getViewCubeCamera = useCallback(() => worldRef.current?.camera?.three ?? null, []);
+
+  const getViewCubeOrbitTarget = useCallback(() => {
+    const c = worldRef.current?.camera?.controls;
+    if (!c) return null;
+    const t = new THREE.Vector3();
+    c.getTarget(t, true);
+    return t;
+  }, []);
+
   const handleDeleteMeasurements = useCallback(() => {
     measurerRef.current?.delete();
   }, []);
@@ -740,6 +1403,29 @@ export default function BIMViewer() {
   const handleDeleteClips = useCallback(() => {
     clipperRef.current?.deleteAll();
   }, []);
+
+  const handleClearSelection = useCallback(async () => {
+    const h = highlighterRef.current;
+    const fr = fragmentsRef.current;
+    const sn = selectStyleNameRef.current;
+    if (!h || !fr || !sn) return;
+    try {
+      if (isolateSelectionActive) {
+        await restoreVisibilityAfterIsolation();
+        setIsolateSelectionActive(false);
+      }
+      await h.clear(LAYER_HOVER_STYLE);
+      await h.clear(sn);
+      await fr.core.update(true);
+    } catch {
+      /* ignore */
+    }
+    setSelectedLayerNames([]);
+    setSelectedProperties([]);
+    setShowProperties(false);
+    lastPickedExpressIdRef.current = null;
+    setSelectionSyncTick((t) => t + 1);
+  }, [isolateSelectionActive, restoreVisibilityAfterIsolation]);
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-background text-foreground">
@@ -752,10 +1438,35 @@ export default function BIMViewer() {
         }}
       />
 
-      {/* Парящая панель инструментов */}
+      {/* Шапка: Toolbar + подсказка «Управление» той же тёмной плашкой, горизонтально под ней */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
-        <div className="pointer-events-auto mx-auto w-full max-w-6xl">
-          <Toolbar onFileUpload={handleFileUpload} />
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-2">
+          <div className="pointer-events-auto">
+            <Toolbar onFileUpload={handleFileUpload} />
+          </div>
+          {modelLoaded && activeTool === "none" && (
+            <div className="hidden w-full md:block">
+              <div className="rounded-xl border border-white/12 bg-[#0D0033]/95 px-3 py-1.5 text-[10px] leading-snug text-white/88 shadow-md backdrop-blur-sm">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="shrink-0 font-semibold uppercase tracking-wider text-white/45">
+                    Управление
+                  </span>
+                  <span className="text-white/30">—</span>
+                  <span>Клик — слой IFC</span>
+                  <span className="text-white/35">·</span>
+                  <span>Shift+клик — ещё слой</span>
+                  <span className="text-white/35">·</span>
+                  <span>Ctrl+клик — элемент</span>
+                  <span className="text-white/35">·</span>
+                  <span>Ctrl+Shift — +элемент</span>
+                  <span className="text-white/35">·</span>
+                  <span>Tab — слой по клику</span>
+                  <span className="text-white/35">·</span>
+                  <span>Наведение — слой / Ctrl — элемент</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -794,9 +1505,14 @@ export default function BIMViewer() {
             isLayerVisible={(layerName) => layerVisibilityByName[layerName] !== false}
             onToggleAllLayersVisibility={handleToggleAllLayersVisibility}
             onToggleLayerVisibility={handleToggleLayerVisibility}
-            selectedLayerName={selectedLayerName}
+            selectedLayerNames={selectedLayerNames}
             onLayerRowSelect={handleLayerRowSelect}
             onFitAll={handleFitAll}
+            isolateSelectionActive={isolateSelectionActive}
+            isolateSelectionEnabled={
+              modelLoaded && (isolateSelectionActive || isolateSelectionCount > 0)
+            }
+            onToggleIsolateSelection={handleToggleIsolateSelection}
           />
         </motion.div>
       </motion.div>
@@ -834,6 +1550,25 @@ export default function BIMViewer() {
         </motion.div>
       </motion.div>
 
+      {/* Куб видов — справа; при открытых свойствах сдвиг влево на ширину панели, без перекрытия */}
+      {modelLoaded && activeTool === "none" && (
+        <ViewCube
+          className={cn(
+            "absolute top-3 z-[39] hidden md:block",
+            showProperties
+              ? "right-[calc(0.75rem+min(18rem,100vw-1.5rem)+0.5rem)] sm:right-[calc(1rem+min(18rem,100vw-1.5rem)+0.5rem)]"
+              : "right-3 sm:right-4"
+          )}
+          getCamera={getViewCubeCamera}
+          getOrbitTarget={getViewCubeOrbitTarget}
+          onFaceClick={handleViewCubeFace}
+          onEdgeClick={handleViewCubeEdge}
+          onCornerClick={handleViewCubeCorner}
+          onViewStep={handleViewCubeStep}
+          onOrbitDrag={handleViewOrbitDrag}
+        />
+      )}
+
       {/* Загрузка */}
       {isLoading && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm">
@@ -869,6 +1604,45 @@ export default function BIMViewer() {
         </div>
       )}
 
+      {/* Строка состояния: по центру снизу, в просвете между левой панелью и правой (не над структурой). */}
+      {modelLoaded && (hoverLayerLabel != null || selectionCaption !== "") && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-[5.25rem] z-[34] flex justify-center px-3 sm:bottom-[5.5rem] sm:px-4">
+          <div className="flex w-full max-w-xl flex-wrap items-end justify-between gap-2 rounded-xl border border-white/12 bg-[#0D0033]/95 px-3 py-2 text-[11px] leading-snug text-white/90 shadow-lg backdrop-blur-sm">
+            <div className="min-w-0 flex-1">
+              {hoverLayerLabel != null && (
+                <div>
+                  <span className="text-white/45">Наведение</span>
+                  <span className="mx-1.5 text-white/35">·</span>
+                  <span className="font-medium text-white">{hoverLayerLabel}</span>
+                </div>
+              )}
+              {selectionCaption !== "" && (
+                <div
+                  className={cn(
+                    hoverLayerLabel != null && "mt-1.5 border-t border-white/10 pt-1.5"
+                  )}
+                >
+                  <span className="text-white/45">Выбор</span>
+                  <span className="mx-1.5 text-white/35">·</span>
+                  <span className="font-medium text-pink-100/95">{selectionCaption}</span>
+                </div>
+              )}
+            </div>
+            {selectionCaption !== "" && (
+              <button
+                type="button"
+                aria-label="Сбросить выделение"
+                onClick={() => void handleClearSelection()}
+                className="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-lg border border-red-500/35 bg-red-950/40 px-2 py-1 text-[10px] font-medium text-red-200 transition-colors hover:border-red-400/50 hover:bg-red-950/70"
+              >
+                <IconX className="h-3.5 w-3.5 text-red-400" stroke={2.2} aria-hidden />
+                Сбросить выделение
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Низ вьюпорта: измерения и сечения */}
       <div className="pointer-events-none absolute inset-x-0 bottom-4 z-40 flex justify-center px-3 sm:px-4">
         <div className="pointer-events-auto w-full max-w-xl">
@@ -897,6 +1671,7 @@ export default function BIMViewer() {
           </div>
         </div>
       )}
+
     </div>
   );
 }

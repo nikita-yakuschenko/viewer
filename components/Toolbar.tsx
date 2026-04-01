@@ -5,6 +5,7 @@ import {
   IconBorderCorners,
   IconEye,
   IconEyeOff,
+  IconFocusCentered,
   IconFolderOpen,
   IconRuler,
   IconScissors,
@@ -62,14 +63,21 @@ export interface StructureLayerToolsPanelProps {
   modelLoaded: boolean;
   allLayersVisible: boolean;
   onToggleAllLayersVisibility: () => void;
+  /** Изоляция выделения: скрыть остальное и вписать в кадр; повтор — снять. */
+  isolateSelectionActive: boolean;
+  isolateSelectionEnabled: boolean;
+  onToggleIsolateSelection: () => void;
   onFitAll: () => void;
 }
 
-/** Низ панели «Структура проекта»: только видимость слоёв и сброс вида камеры. */
+/** Низ панели «Структура проекта»: слои, изоляция выделения, сброс вида. */
 export function StructureLayerToolsPanel({
   modelLoaded,
   allLayersVisible,
   onToggleAllLayersVisibility,
+  isolateSelectionActive,
+  isolateSelectionEnabled,
+  onToggleIsolateSelection,
   onFitAll,
 }: StructureLayerToolsPanelProps) {
   return (
@@ -91,12 +99,28 @@ export function StructureLayerToolsPanel({
         <StructureDarkDivider />
 
         <StructureDarkToolButton
+          onClick={onToggleIsolateSelection}
+          title={
+            isolateSelectionActive
+              ? "Снять изоляцию — показать модель по слоям и сбросить камеру на всю модель"
+              : "Изолировать выделение: скрыть остальное и вписать выбранное в кадр"
+          }
+          disabled={!isolateSelectionEnabled}
+          active={isolateSelectionActive}
+        >
+          <IconFocusCentered className="h-4 w-4 shrink-0" stroke={2} />
+          <span className="ml-1 text-xs font-medium">Изоляция</span>
+        </StructureDarkToolButton>
+
+        <StructureDarkDivider />
+
+        <StructureDarkToolButton
           onClick={onFitAll}
           title="Сброс вида — показать всю модель в кадре"
           disabled={!modelLoaded}
         >
           <IconBorderCorners className="h-4 w-4 shrink-0" stroke={2} />
-          <span className="ml-1 text-xs font-medium">Сброс вида</span>
+          <span className="ml-1 text-xs font-medium">Сброс</span>
         </StructureDarkToolButton>
       </div>
     </div>
@@ -171,11 +195,14 @@ function StructureDarkToolButton({
   onClick,
   title,
   disabled = false,
+  active = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   title: string;
   disabled?: boolean;
+  /** Включённый режим (например изоляция активна). */
+  active?: boolean;
 }) {
   return (
     <button
@@ -186,7 +213,8 @@ function StructureDarkToolButton({
       className={cn(
         "inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium",
         "transition-colors hover:bg-white/15 active:bg-white/20",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0D0033]"
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0D0033]",
+        active && "bg-white/18 text-white"
       )}
     >
       {children}

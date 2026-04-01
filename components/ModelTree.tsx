@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { TreeNode } from "./BIMViewer";
 import {
   IconChevronCompactLeft,
@@ -24,9 +25,12 @@ interface ModelTreeProps {
   isLayerVisible: (layerName: string) => boolean;
   onToggleAllLayersVisibility: () => void;
   onToggleLayerVisibility: (layerName: string) => void;
-  selectedLayerName: string | null;
-  onLayerRowSelect: (layerName: string) => void;
+  selectedLayerNames: string[];
+  onLayerRowSelect: (layerName: string, additive: boolean) => void;
   onFitAll: () => void;
+  isolateSelectionActive: boolean;
+  isolateSelectionEnabled: boolean;
+  onToggleIsolateSelection: () => void;
 }
 
 const glassPanel =
@@ -46,10 +50,24 @@ export function ModelTree({
   isLayerVisible,
   onToggleAllLayersVisibility,
   onToggleLayerVisibility,
-  selectedLayerName,
+  selectedLayerNames,
   onLayerRowSelect,
   onFitAll,
+  isolateSelectionActive,
+  isolateSelectionEnabled,
+  onToggleIsolateSelection,
 }: ModelTreeProps) {
+  useEffect(() => {
+    const last = selectedLayerNames[selectedLayerNames.length - 1];
+    if (!last) return;
+    const safe =
+      typeof CSS !== "undefined" && "escape" in CSS
+        ? CSS.escape(last)
+        : last.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const el = document.querySelector(`[data-layer-row="${safe}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedLayerNames]);
+
   return (
     <div className={cn("relative flex h-full min-h-0 w-full flex-col", glassPanel)}>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
@@ -78,7 +96,7 @@ export function ModelTree({
                     node={node}
                     isLayerVisible={isLayerVisible}
                     onToggleLayerVisibility={onToggleLayerVisibility}
-                    selectedLayerName={selectedLayerName}
+                    selectedLayerNames={selectedLayerNames}
                     onLayerRowSelect={onLayerRowSelect}
                   />
                 ))
@@ -89,6 +107,9 @@ export function ModelTree({
                 modelLoaded={modelLoaded}
                 allLayersVisible={allLayersVisible}
                 onToggleAllLayersVisibility={onToggleAllLayersVisibility}
+                isolateSelectionActive={isolateSelectionActive}
+                isolateSelectionEnabled={isolateSelectionEnabled}
+                onToggleIsolateSelection={onToggleIsolateSelection}
                 onFitAll={onFitAll}
               />
             </div>
@@ -131,18 +152,18 @@ function TreeNodeItem({
   node,
   isLayerVisible,
   onToggleLayerVisibility,
-  selectedLayerName,
+  selectedLayerNames,
   onLayerRowSelect,
 }: {
   node: TreeNode;
   isLayerVisible: (layerName: string) => boolean;
   onToggleLayerVisibility: (layerName: string) => void;
-  selectedLayerName: string | null;
-  onLayerRowSelect: (layerName: string) => void;
+  selectedLayerNames: string[];
+  onLayerRowSelect: (layerName: string, additive: boolean) => void;
 }) {
   const isLayerNode = node.type === LAYER_NODE_TYPE;
   const layerVisible = isLayerNode ? isLayerVisible(node.name) : true;
-  const isLayerActive = isLayerNode && selectedLayerName === node.name;
+  const isLayerActive = isLayerNode && selectedLayerNames.includes(node.name);
 
   if (!isLayerNode) {
     return (
@@ -155,13 +176,14 @@ function TreeNodeItem({
   return (
     <div className="mb-0.5">
       <div
+        data-layer-row={node.name}
         className={cn(
           "inline-block max-w-full cursor-pointer rounded-md px-1.5 py-1 align-top",
           isLayerActive
             ? "bg-primary/15 ring-1 ring-inset ring-primary/35"
             : "hover:bg-white/10"
         )}
-        onClick={() => onLayerRowSelect(node.name)}
+        onClick={(e) => onLayerRowSelect(node.name, e.shiftKey)}
       >
         <div className="flex min-w-0 max-w-full items-center gap-1.5">
           <button
