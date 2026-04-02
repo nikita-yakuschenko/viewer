@@ -174,7 +174,7 @@ export function GizmoCube({
       </svg>
 
       <svg
-        className="absolute left-0 top-0 z-[12] cursor-grab text-transparent active:cursor-grabbing"
+        className="absolute left-0 top-0 z-12 cursor-grab text-transparent active:cursor-grabbing"
         width={OUTER}
         height={OUTER}
         style={{ touchAction: "none" }}
@@ -247,7 +247,7 @@ export function GizmoCube({
       </button>
 
       <div
-        className="pointer-events-auto absolute z-[18] flex items-center justify-center"
+        className="pointer-events-auto absolute z-18 flex items-center justify-center"
         style={{
           left: CENTER_INSET,
           top: CENTER_INSET,
