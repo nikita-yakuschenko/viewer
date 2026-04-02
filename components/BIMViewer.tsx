@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as OBC from "@thatopen/components";
 import * as OBCF from "@thatopen/components-front";
-import { RenderedFaces } from "@thatopen/fragments";
+import { RenderedFaces, SnappingClass } from "@thatopen/fragments";
 import * as THREE from "three";
 import * as WEBIFC from "web-ifc";
 import { ModelTree } from "./ModelTree";
@@ -19,6 +19,7 @@ import {
 } from "./ViewCube";
 import { IconX } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
+import { extractPanelMarkFromLayerName, groupLayerNamesByPanel } from "@/lib/ifcPanelLayerGroups";
 import { motion, type Transition } from "framer-motion";
 
 const panelSlideTransition: Transition = {
@@ -328,10 +329,56 @@ export interface TreeNode {
   name: string;
   type: string;
   children: TreeNode[];
+  /** Маркер панели (например П(К)-01), только для узла «IfcPanelGroup». */
+  panelKey?: string;
 }
 
 type LayerIdsByName = Record<string, number[]>;
 type LayerVisibilityByName = Record<string, boolean>;
+
+const PANEL_GROUP_TYPE = "IfcPanelGroup";
+
+/** Дерево слоёв: плоский список или группы «Панель П(…)» по суффиксу в имени слоя. */
+function buildLayerTreeNodes(layerIdsByName: LayerIdsByName, grouped: boolean): TreeNode[] {
+  const sorted = Object.keys(layerIdsByName).sort((a, b) => a.localeCompare(b, "ru"));
+  let sid = -1;
+  if (!grouped) {
+    return sorted.map((name) => ({
+      expressID: sid--,
+      name,
+      type: "IfcPresentationLayerAssignment",
+      children: [],
+    }));
+  }
+  const { panelGroups, ungrouped } = groupLayerNamesByPanel(sorted);
+  const roots: TreeNode[] = [];
+  const panelKeys = [...panelGroups.keys()].sort((a, b) => a.localeCompare(b, "ru"));
+  for (const key of panelKeys) {
+    const names = panelGroups.get(key)!;
+    const children: TreeNode[] = names.map((name) => ({
+      expressID: sid--,
+      name,
+      type: "IfcPresentationLayerAssignment",
+      children: [],
+    }));
+    roots.push({
+      expressID: sid--,
+      name: `Панель ${key}`,
+      type: PANEL_GROUP_TYPE,
+      panelKey: key,
+      children,
+    });
+  }
+  for (const name of ungrouped) {
+    roots.push({
+      expressID: sid--,
+      name,
+      type: "IfcPresentationLayerAssignment",
+      children: [],
+    });
+  }
+  return roots;
+}
 
 /** Первый слой IFC, в котором встречается product id (для клика по модели → слой). */
 function getLayerNameForProductId(
@@ -350,7 +397,7 @@ export default function BIMViewer() {
   const worldRef = useRef<OBC.SimpleWorld<
     OBC.SimpleScene,
     OBC.SimpleCamera,
-    OBC.SimpleRenderer
+    OBCF.RendererWith2D
   > | null>(null);
   const fragmentsRef = useRef<OBC.FragmentsManager | null>(null);
   const ifcLoaderRef = useRef<OBC.IfcLoader | null>(null);
@@ -383,15 +430,40 @@ export default function BIMViewer() {
   const [isLoading, setIsLoading] = useState(false);
   const [modelLoaded, setModelLoaded] = useState(false);
   const [selectedProperties, setSelectedProperties] = useState<PropertySet[]>([]);
-  const [treeData, setTreeData] = useState<TreeNode[]>([]);
+  /** Сообщение вместо списка слоёв (ошибка / нет web-ifc / нет слоёв в IFC). */
+  const [layersTreeBanner, setLayersTreeBanner] = useState<{
+    variant: "info" | "error";
+    message: string;
+  } | null>(null);
+  /** Группировать слои по маркеру панели (П(К)-01 и т.п.). */
+  const [groupLayersByPanel, setGroupLayersByPanel] = useState(true);
+
   const [activeTool, setActiveTool] = useState<"none" | "measure" | "clip">("none");
   const [showTree, setShowTree] = useState(true);
   const [showProperties, setShowProperties] = useState(false);
+  /** Режим: сворачиваем структуру слоёв до списка панелей. */
+  const [structureCollapsed, setStructureCollapsed] = useState(false);
   const [modelName, setModelName] = useState<string>("");
   const [treePeekHover, setTreePeekHover] = useState(false);
   const [propertiesPeekHover, setPropertiesPeekHover] = useState(false);
   const [layerIdsByName, setLayerIdsByName] = useState<LayerIdsByName>({});
   const [layerVisibilityByName, setLayerVisibilityByName] = useState<LayerVisibilityByName>({});
+
+  const treeData = useMemo((): TreeNode[] => {
+    if (layersTreeBanner) {
+      return [
+        {
+          expressID: -1,
+          name: layersTreeBanner.message,
+          type: layersTreeBanner.variant === "error" ? "Error" : "Info",
+          children: [],
+        },
+      ];
+    }
+    if (Object.keys(layerIdsByName).length === 0) return [];
+    return buildLayerTreeNodes(layerIdsByName, groupLayersByPanel);
+  }, [layerIdsByName, groupLayersByPanel, layersTreeBanner]);
+
   /** Выбранные слои IFC (множественный выбор: Shift+клик по слою). */
   const [selectedLayerNames, setSelectedLayerNames] = useState<string[]>([]);
   /** Подпись IFC-слоя под курсором (строка состояния). */
@@ -428,7 +500,15 @@ export default function BIMViewer() {
       return;
     }
     if (selectedLayerNames.length > 1) {
-      setSelectionCaption(`Выбрано слоёв: ${selectedLayerNames.length}`);
+      const m0 = extractPanelMarkFromLayerName(selectedLayerNames[0]);
+      if (
+        m0 &&
+        selectedLayerNames.every((n) => extractPanelMarkFromLayerName(n) === m0)
+      ) {
+        setSelectionCaption(`Панель ${m0} · ${selectedLayerNames.length} слоёв`);
+      } else {
+        setSelectionCaption(`Выбрано слоёв: ${selectedLayerNames.length}`);
+      }
       return;
     }
     if (selectedLayerNames.length === 1) {
@@ -490,10 +570,10 @@ export default function BIMViewer() {
     const world = worlds.create<
       OBC.SimpleScene,
       OBC.SimpleCamera,
-      OBC.SimpleRenderer
+      OBCF.RendererWith2D
     >();
     world.scene = new OBC.SimpleScene(components);
-    world.renderer = new OBC.SimpleRenderer(components, containerRef.current);
+    world.renderer = new OBCF.RendererWith2D(components, containerRef.current);
     world.camera = new OBC.SimpleCamera(components);
     worldRef.current = world;
 
@@ -530,6 +610,256 @@ export default function BIMViewer() {
     const rimLight = new THREE.DirectionalLight(0xffffff, 0.22);
     rimLight.position.set(-6, 8, 28);
     scene3.add(rimLight);
+
+    // ========== Измерения: подсветка снапнутой вершины/ребра ==========
+    const vertexPicker = new OBCF.GraphicVertexPicker(components);
+    // Уменьшаем размер внутреннего маркера picker'а,
+    // а сам маркер будем принудительно скрывать (показываются только наши минималистичные точки).
+    vertexPicker.pickerSize = 8;
+
+    const measureSnapRoot = new THREE.Group();
+    measureSnapRoot.name = "measureSnapOverlay";
+    measureSnapRoot.visible = false;
+
+    const measureSnapSphereGeom = new THREE.SphereGeometry(0.012, 10, 10);
+    const vertexSphereA = new THREE.Mesh(
+      measureSnapSphereGeom,
+      new THREE.MeshBasicMaterial({
+        color: 0x22d3ee,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: true,
+        depthWrite: false,
+      })
+    );
+    const vertexSphereB = new THREE.Mesh(
+      measureSnapSphereGeom,
+      new THREE.MeshBasicMaterial({
+        color: 0x0ea5e9,
+        transparent: true,
+        opacity: 0.28,
+        depthTest: true,
+        depthWrite: false,
+        wireframe: false,
+      })
+    );
+    vertexSphereA.renderOrder = 2000;
+    vertexSphereB.renderOrder = 2000;
+
+    const edgeLineGeom = new THREE.BufferGeometry();
+    const edgePositions = new Float32Array(6); // 2 points * 3 coords
+    edgeLineGeom.setAttribute("position", new THREE.BufferAttribute(edgePositions, 3));
+    const edgeLineMat = new THREE.LineBasicMaterial({
+      color: 0x0ea5e9,
+      transparent: true,
+      opacity: 0.18,
+    });
+    const edgeLine = new THREE.LineSegments(edgeLineGeom, edgeLineMat);
+    edgeLine.renderOrder = 2000;
+
+    measureSnapRoot.add(vertexSphereA);
+    measureSnapRoot.add(vertexSphereB);
+    measureSnapRoot.add(edgeLine);
+    scene3.add(measureSnapRoot);
+
+    measureSnapOverlayRef.current = {
+      root: measureSnapRoot,
+      vertexSphereGeom: measureSnapSphereGeom,
+      vertexSphereMat: vertexSphereA.material as THREE.MeshBasicMaterial,
+      vertexSphereA,
+      vertexSphereB,
+      edgeLineGeom,
+      edgeLineMat,
+      edgeLine,
+      isVisible: false,
+    };
+
+    let measureSnapSeq = 0;
+    let measureSnapRaf = 0;
+    let measureFastStartPending = false;
+    let lastUnitsPatchMs = 0;
+    const tmpVecA = new THREE.Vector3();
+    const tmpVecB = new THREE.Vector3();
+
+    const hideMeasureSnap = () => {
+      const ov = measureSnapOverlayRef.current;
+      if (!ov) return;
+      ov.root.visible = false;
+      ov.vertexSphereA.visible = false;
+      ov.vertexSphereB.visible = false;
+      ov.edgeLine.visible = false;
+    };
+
+    const updateMeasureSnapFromResult = (res: any) => {
+      const ov = measureSnapOverlayRef.current;
+      if (!ov) return;
+      if (!res || typeof res !== "object") {
+        hideMeasureSnap();
+        return;
+      }
+
+      const sc = typeof res.snappingClass === "number" ? res.snappingClass : null;
+      if (sc === SnappingClass.POINT || sc === 0) {
+        const p = res.point;
+        if (!p || typeof p.x !== "number") {
+          hideMeasureSnap();
+          return;
+        }
+        ov.root.visible = true;
+        ov.vertexSphereA.visible = true;
+        ov.vertexSphereA.position.set(p.x, p.y, p.z);
+        ov.vertexSphereB.visible = false;
+        ov.edgeLine.visible = false;
+        return;
+      }
+
+      if (sc === SnappingClass.LINE || sc === 1) {
+        const p1 = res.snappedEdgeP1;
+        const p2 = res.snappedEdgeP2;
+        ov.root.visible = true;
+
+        if (p1 && p2 && typeof p1.x === "number" && typeof p2.x === "number") {
+          tmpVecA.set(p1.x, p1.y, p1.z);
+          tmpVecB.set(p2.x, p2.y, p2.z);
+          ov.vertexSphereA.visible = true;
+          ov.vertexSphereB.visible = true;
+          ov.vertexSphereA.position.copy(tmpVecA);
+          ov.vertexSphereB.position.copy(tmpVecB);
+
+          const attr = ov.edgeLineGeom.getAttribute("position") as THREE.BufferAttribute;
+          attr.setXYZ(0, tmpVecA.x, tmpVecA.y, tmpVecA.z);
+          attr.setXYZ(1, tmpVecB.x, tmpVecB.y, tmpVecB.z);
+          attr.needsUpdate = true;
+          ov.edgeLine.visible = true;
+          return;
+        }
+
+        // Фоллбек: подсветим только nearest point.
+        const p = res.point;
+        if (p && typeof p.x === "number") {
+          ov.vertexSphereA.visible = true;
+          ov.vertexSphereB.visible = false;
+          ov.vertexSphereA.position.set(p.x, p.y, p.z);
+          ov.edgeLine.visible = false;
+          return;
+        }
+
+        hideMeasureSnap();
+        return;
+      }
+
+      hideMeasureSnap();
+    };
+
+    const patchMeasurerUnitsText = () => {
+      const now = performance.now();
+      if (now - lastUnitsPatchMs < 70) return;
+      lastUnitsPatchMs = now;
+      const m = measurerRef.current;
+      if (!m) return;
+      // Делаем "mm" -> "мм" и "m" -> "м" прямо в DOM-лейблах библиотеки.
+      // (Библиотека может выводить &nbsp; вместо пробела и без пробела перед единицей.)
+      const normalize = (s: string) => s.replace(/\u00A0/g, " ");
+      const patch = (s: string) => {
+        let t = normalize(s);
+        // С хвоста: "mm", " mm", "mm " → "мм"
+        t = t.replace(/(\\s|^)mm\\s*$/i, (_all, g1) => `${g1}мм`);
+        // С хвоста: "m", " m" → "м" (для длины обычно не нужно, но пусть будет корректно)
+        t = t.replace(/(\\s|^)m\\s*$/i, (_all, g1) => `${g1}м`);
+        return t;
+      };
+
+      const labelsAny = m.labels as any;
+      if (!labelsAny) return;
+
+      const patchMark = (mark: any) => {
+        const el: HTMLElement | undefined = mark?.three?.element;
+        if (!el) return;
+        const t = el.textContent;
+        if (typeof t !== "string") return;
+        const next = patch(t);
+        if (next !== t) el.textContent = next;
+      };
+
+      try {
+        const iterFn = labelsAny[Symbol.iterator];
+        if (typeof iterFn === "function") {
+          for (const mark of labelsAny) patchMark(mark);
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+
+      if (typeof labelsAny.forEach === "function") {
+        labelsAny.forEach((mark: any) => patchMark(mark));
+      }
+    };
+
+    const onMeasurePointerMove = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
+      const measurer = measurerRef.current;
+      if (activeToolRef.current !== "measure") {
+        hideMeasureSnap();
+        if (measurer?.isDragging) measurer.cancelCreation();
+        measureFastStartPending = false;
+        return;
+      }
+      if (!measurer) {
+        hideMeasureSnap();
+        measureFastStartPending = false;
+        return;
+      }
+
+      const seq = ++measureSnapSeq;
+      if (measureSnapRaf) cancelAnimationFrame(measureSnapRaf);
+      measureSnapRaf = requestAnimationFrame(() => {
+        void vertexPicker
+          .get({
+            world,
+            snappingClasses: [SnappingClass.POINT, SnappingClass.LINE],
+          })
+          .then((res) => {
+            if (seq !== measureSnapSeq) return;
+            // Внутренний picker рисует DOM маркер — мы его скрываем, оставляем только наши минимальные точки.
+            if (vertexPicker.marker) vertexPicker.marker.visible = false;
+
+            const sc = typeof res?.snappingClass === "number" ? res.snappingClass : null;
+            const hasSnap = sc === SnappingClass.POINT || sc === SnappingClass.LINE || sc === 0 || sc === 1;
+
+            if (!res || typeof res !== "object" || !hasSnap) {
+              hideMeasureSnap();
+              measureFastStartPending = false;
+              if (measurer.isDragging) measurer.cancelCreation();
+              return;
+            }
+
+            updateMeasureSnapFromResult(res);
+            patchMeasurerUnitsText();
+
+            // Быстрое измерение: при наведении на ребро/вершину запускаем preview, но не фиксируем.
+            if (!measurer.isDragging && !measureFastStartPending) {
+              measureFastStartPending = true;
+              void measurer
+                .create()
+                .catch(() => {})
+                .finally(() => {
+                  measureFastStartPending = false;
+                });
+            }
+          })
+          .catch(() => {
+            if (seq !== measureSnapSeq) return;
+            hideMeasureSnap();
+            measureFastStartPending = false;
+          });
+      });
+    };
+
+    hideMeasureSnap();
+
+    // Слушатель будет активен всё время, но внутри проверяем activeTool/measurer.isDragging.
+    containerRef.current?.addEventListener("pointermove", onMeasurePointerMove, true);
 
     const grids = components.get(OBC.Grids);
     const worldGrid = grids.create(world);
@@ -592,8 +922,13 @@ export default function BIMViewer() {
     const measurer = components.get(OBCF.LengthMeasurement);
     measurer.world = world;
     measurer.enabled = false;
-    measurer.snapDistance = 1;
-    measurer.units = "m";
+    // В режиме `edge` измерительные точки ограничиваются рёбрами,
+    // что даёт привязку к вершинам (концам рёбер).
+    measurer.mode = "edge";
+    measurer.snapDistance = 2;
+    measurer.units = "mm";
+    // В preview/creation позволяем снапиться к точкам и концам линий.
+    measurer.snappings = [SnappingClass.POINT, SnappingClass.LINE] as any;
     measurer.rounding = 2;
     measurerRef.current = measurer;
 
@@ -780,6 +1115,12 @@ export default function BIMViewer() {
       containerRef.current?.removeEventListener("pointerdown", onOrbitPointerDown, true);
       containerRef.current?.removeEventListener("click", handleClick);
       containerRef.current?.removeEventListener("dblclick", handleDblClick);
+      containerRef.current?.removeEventListener("pointermove", onMeasurePointerMove, true);
+      try {
+        vertexPicker.dispose();
+      } catch {
+        /* ignore */
+      }
       window.removeEventListener("keydown", handleKeyDown);
       if (fragmentsWasReady) {
         components.dispose();
@@ -802,7 +1143,24 @@ export default function BIMViewer() {
     if (!measurer || !clipper) return;
     measurer.enabled = activeTool === "measure";
     clipper.enabled = activeTool === "clip";
+    if (activeTool !== "measure") {
+      const ov = measureSnapOverlayRef.current;
+      if (ov) ov.root.visible = false;
+    }
   }, [activeTool]);
+
+  // Overlay для подсветки “примагниченной” вершины/ребра при построении измерений.
+  const measureSnapOverlayRef = useRef<{
+    root: THREE.Group;
+    vertexSphereGeom: THREE.SphereGeometry;
+    vertexSphereMat: THREE.MeshBasicMaterial;
+    vertexSphereA: THREE.Mesh;
+    vertexSphereB: THREE.Mesh;
+    edgeLineGeom: THREE.BufferGeometry;
+    edgeLineMat: THREE.LineBasicMaterial;
+    edgeLine: THREE.LineSegments;
+    isVisible: boolean;
+  } | null>(null);
 
   const loadProperties = async (
     components: OBC.Components,
@@ -986,7 +1344,6 @@ export default function BIMViewer() {
           if (pid != null) pidSet.add(pid);
         }
       }
-      let syntheticId = -1;
       const sortedLayers = [...byLayerName.entries()].sort((a, b) =>
         a[0].localeCompare(b[0], "ru")
       );
@@ -994,27 +1351,17 @@ export default function BIMViewer() {
       for (const [layerName, pids] of sortedLayers) {
         nextLayerIdsByName[layerName] = [...pids];
       }
-      // Слои — плоский список (без элементов в дереве); id по-прежнему в layerIdsByName
-      const roots: TreeNode[] = sortedLayers.map(([layerName]) => ({
-        expressID: syntheticId--,
-        name: layerName,
-        type: "IfcPresentationLayerAssignment",
-        children: [],
-      }));
-      if (roots.length === 0) {
+      if (Object.keys(nextLayerIdsByName).length === 0) {
         setLayerIdsByName({});
         setLayerVisibilityByName({});
         setSelectedLayerNames([]);
-        setTreeData([
-          {
-            expressID: -1,
-            name: "Нет слоёв (IfcPresentationLayerAssignment) в файле",
-            type: "Info",
-            children: [],
-          },
-        ]);
+        setLayersTreeBanner({
+          variant: "info",
+          message: "Нет слоёв (IfcPresentationLayerAssignment) в файле",
+        });
         return;
       }
+      setLayersTreeBanner(null);
       setLayerIdsByName(nextLayerIdsByName);
       setLayerVisibilityByName((prev) => {
         const next: LayerVisibilityByName = {};
@@ -1026,20 +1373,15 @@ export default function BIMViewer() {
       setSelectedLayerNames((prev) =>
         prev.filter((name) => name in nextLayerIdsByName)
       );
-      setTreeData(roots);
     } catch (error) {
       console.warn("Failed to build layers tree from IFC:", error);
       setLayerIdsByName({});
       setLayerVisibilityByName({});
       setSelectedLayerNames([]);
-      setTreeData([
-        {
-          expressID: -1,
-          name: "Не удалось построить дерево слоёв",
-          type: "Error",
-          children: [],
-        },
-      ]);
+      setLayersTreeBanner({
+        variant: "error",
+        message: "Не удалось построить дерево слоёв",
+      });
     }
   };
 
@@ -1052,14 +1394,12 @@ export default function BIMViewer() {
       await buildLayersTree(model, api, mid);
     } else {
       setSelectedLayerNames([]);
-      setTreeData([
-        {
-          expressID: -1,
-          name: "Слои IFC недоступны: не удалось открыть модель в web-ifc",
-          type: "Info",
-          children: [],
-        },
-      ]);
+      setLayerIdsByName({});
+      setLayerVisibilityByName({});
+      setLayersTreeBanner({
+        variant: "info",
+        message: "Слои IFC недоступны: не удалось открыть модель в web-ifc",
+      });
     }
   };
 
@@ -1149,6 +1489,60 @@ export default function BIMViewer() {
         }
       } catch (e) {
         console.warn("Подсветка слоя не удалась:", e);
+      } finally {
+        setSelectionSyncTick((t) => t + 1);
+      }
+    },
+    [layerIdsByName]
+  );
+
+  const handleTogglePanelVisibility = useCallback(
+    async (layerNames: string[]) => {
+      if (layerNames.length === 0) return;
+      const allVisible = layerNames.every((n) => layerVisibilityByName[n] !== false);
+      const nextVisible = !allVisible;
+      const ids = Array.from(
+        new Set(layerNames.flatMap((n) => layerIdsByName[n] || []))
+      );
+      if (ids.length === 0) return;
+      await setItemsVisibility(ids, nextVisible);
+      setLayerVisibilityByName((prev) => {
+        const next = { ...prev };
+        for (const n of layerNames) next[n] = nextVisible;
+        return next;
+      });
+    },
+    [layerIdsByName, layerVisibilityByName, setItemsVisibility]
+  );
+
+  const handlePanelRowSelect = useCallback(
+    async (layerNames: string[], additive = false) => {
+      const model = lastFragmentsModelRef.current;
+      const highlighter = highlighterRef.current;
+      const fragments = fragmentsRef.current;
+      if (!model || !highlighter || !fragments) return;
+      const ids = Array.from(
+        new Set(layerNames.flatMap((n) => layerIdsByName[n] || []))
+      );
+      if (ids.length === 0) return;
+      setSelectedProperties([]);
+      setShowProperties(false);
+      const selectName = selectStyleNameRef.current;
+      const map: OBC.ModelIdMap = { [model.modelId]: new Set(ids) };
+      try {
+        await highlighter.highlightByID(selectName, map, !additive, false, null, false);
+        await fragments.core.update(true);
+        if (additive) {
+          setSelectedLayerNames((prev) => {
+            const merged = new Set(prev);
+            for (const n of layerNames) merged.add(n);
+            return [...merged];
+          });
+        } else {
+          setSelectedLayerNames(layerNames);
+        }
+      } catch (e) {
+        console.warn("Подсветка панели не удалась:", e);
       } finally {
         setSelectionSyncTick((t) => t + 1);
       }
@@ -1556,7 +1950,7 @@ export default function BIMViewer() {
       {/* 3D: на весь экран под UI */}
       <div
         ref={containerRef}
-        className="absolute inset-0 z-0"
+        className="relative z-0 h-full w-full"
         style={{
           cursor: activeTool !== "none" ? "crosshair" : "default",
         }}
@@ -1625,12 +2019,18 @@ export default function BIMViewer() {
             isOpen={showTree}
             collapsed={!showTree}
             modelName={modelName}
+            groupLayersByPanel={groupLayersByPanel}
+            onGroupLayersByPanelChange={setGroupLayersByPanel}
+            structureCollapsed={structureCollapsed}
+            onToggleStructureCollapsed={setStructureCollapsed}
             allLayersVisible={allLayersVisible}
             isLayerVisible={(layerName) => layerVisibilityByName[layerName] !== false}
             onToggleAllLayersVisibility={handleToggleAllLayersVisibility}
             onToggleLayerVisibility={handleToggleLayerVisibility}
+            onTogglePanelVisibility={handleTogglePanelVisibility}
             selectedLayerNames={selectedLayerNames}
             onLayerRowSelect={handleLayerRowSelect}
+            onPanelRowSelect={handlePanelRowSelect}
             onFitAll={handleFitAll}
             isolateSelectionActive={isolateSelectionActive}
             isolateSelectionEnabled={
@@ -1678,7 +2078,7 @@ export default function BIMViewer() {
       {modelLoaded && activeTool === "none" && (
         <ViewCube
           className={cn(
-            "absolute top-3 z-[39] hidden md:block",
+            "absolute top-3 z-39 hidden md:block",
             showProperties
               ? "right-[calc(0.75rem+min(18rem,100vw-1.5rem)+0.5rem)] sm:right-[calc(1rem+min(18rem,100vw-1.5rem)+0.5rem)]"
               : "right-3 sm:right-4"
@@ -1730,7 +2130,7 @@ export default function BIMViewer() {
 
       {/* Строка состояния: по центру снизу, в просвете между левой панелью и правой (не над структурой). */}
       {modelLoaded && (hoverLayerLabel != null || selectionCaption !== "") && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-[5.25rem] z-[34] flex justify-center px-3 sm:bottom-[5.5rem] sm:px-4">
+        <div className="pointer-events-none absolute inset-x-0 bottom-21 z-34 flex justify-center px-3 sm:bottom-22 sm:px-4">
           <div className="flex w-full max-w-xl flex-wrap items-end justify-between gap-2 rounded-xl border border-white/12 bg-[#0D0033]/95 px-3 py-2 text-[11px] leading-snug text-white/90 shadow-lg backdrop-blur-sm">
             <div className="min-w-0 flex-1">
               {hoverLayerLabel != null && (
@@ -1790,7 +2190,7 @@ export default function BIMViewer() {
         <div className="pointer-events-none absolute bottom-30 left-1/2 z-40 -translate-x-1/2 px-4 sm:bottom-32">
           <div className="pointer-events-auto rounded-full border border-white/25 bg-background/55 px-4 py-2 text-sm text-foreground shadow-xl backdrop-blur-xl">
             {activeTool === "measure"
-              ? "Двойной клик: создать измерение • Delete: удалить"
+              ? "Наведение: быстрое измерение по ребру • Двойной клик: зафиксировать • Delete: удалить"
               : "Клик: добавить сечение • Delete: удалить"}
           </div>
         </div>

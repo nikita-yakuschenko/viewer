@@ -63,6 +63,9 @@ export interface StructureLayerToolsPanelProps {
   modelLoaded: boolean;
   allLayersVisible: boolean;
   onToggleAllLayersVisibility: () => void;
+  /** Группировать слои по панелям (маркер в имени слоя). */
+  groupLayersByPanel: boolean;
+  onGroupLayersByPanelChange: (value: boolean) => void;
   /** Изоляция выделения: скрыть остальное и вписать в кадр; повтор — снять. */
   isolateSelectionActive: boolean;
   isolateSelectionEnabled: boolean;
@@ -75,6 +78,8 @@ export function StructureLayerToolsPanel({
   modelLoaded,
   allLayersVisible,
   onToggleAllLayersVisibility,
+  groupLayersByPanel,
+  onGroupLayersByPanelChange,
   isolateSelectionActive,
   isolateSelectionEnabled,
   onToggleIsolateSelection,
@@ -122,6 +127,19 @@ export function StructureLayerToolsPanel({
           <IconBorderCorners className="h-4 w-4 shrink-0" stroke={2} />
           <span className="ml-1 text-xs font-medium">Сброс</span>
         </StructureDarkToolButton>
+
+        <StructureDarkDivider />
+
+        <label className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-white/90">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 shrink-0 rounded border border-white/30 bg-background/40 accent-primary"
+            checked={groupLayersByPanel}
+            onChange={(e) => onGroupLayersByPanelChange(e.target.checked)}
+            disabled={!modelLoaded}
+          />
+          <span className="whitespace-nowrap">Группировать панели</span>
+        </label>
       </div>
     </div>
   );
