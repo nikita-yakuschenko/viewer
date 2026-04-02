@@ -39,7 +39,8 @@ function makeTextTexture(text: string, size = TEX_SIZE): THREE.CanvasTexture {
   ctx.lineWidth = Math.max(4, Math.round(size * 0.014));
   ctx.strokeRect(pad + 2, pad + 2, size - (pad + 2) * 2, size - (pad + 2) * 2);
   ctx.fillStyle = "#0f172a";
-  ctx.font = `bold ${Math.round(size * 0.11)}px system-ui, "Segoe UI", sans-serif`;
+  const fontPx = Math.round(size * 0.145);
+  ctx.font = `900 ${fontPx}px system-ui, "Segoe UI", sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, size / 2, size / 2);
@@ -121,7 +122,7 @@ export function buildLabeledFaceMeshes(): {
   wire.renderOrder = 1;
   group.add(wire);
 
-  const planeSize = 1.58;
+  const planeSize = 1.64;
   for (const face of FACE_ORDER) {
     const geom = new THREE.PlaneGeometry(planeSize, planeSize);
     const tex = makeTextTexture(LABEL_RU[face]);

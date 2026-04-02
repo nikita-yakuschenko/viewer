@@ -35,6 +35,10 @@ const CORNERS: ViewCubeCorner[] = [
   [-1, -1, -1],
 ];
 
+/** Ребро мини-куба на вершине: крупнее сферы — проще попасть и читается как «кубик». */
+const CORNER_CUBE_EDGE = 0.28;
+const CORNER_POS = 0.9;
+
 function makeEdgeStripMatrix(
   mid: readonly [number, number, number],
   along: readonly [number, number, number],
@@ -75,7 +79,7 @@ export function buildEdgeAndCornerMeshes(): {
 
   const cornerMeshes: THREE.Mesh[] = [];
   for (const [sx, sy, sz] of CORNERS) {
-    const cornerGeom = new THREE.SphereGeometry(0.12, 12, 12);
+    const cornerGeom = new THREE.BoxGeometry(CORNER_CUBE_EDGE, CORNER_CUBE_EDGE, CORNER_CUBE_EDGE);
     const cornerMat = new THREE.MeshBasicMaterial({
       color: 0x64748b,
       transparent: true,
@@ -83,7 +87,8 @@ export function buildEdgeAndCornerMeshes(): {
       depthWrite: false,
     });
     const mesh = new THREE.Mesh(cornerGeom, cornerMat);
-    mesh.position.set(sx * 0.88 * HALF, sy * 0.88 * HALF, sz * 0.88 * HALF);
+    mesh.position.set(sx * CORNER_POS * HALF, sy * CORNER_POS * HALF, sz * CORNER_POS * HALF);
+    mesh.renderOrder = 4;
     mesh.userData.pickKind = "corner" as const;
     mesh.userData.corner = [sx, sy, sz] as ViewCubeCorner;
     cornerMeshes.push(mesh);

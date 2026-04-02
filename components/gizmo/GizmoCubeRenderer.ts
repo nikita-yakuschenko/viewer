@@ -126,9 +126,21 @@ export class GizmoCubeRenderer {
   /** Подсветка грани / ребра / вершины под курсором (WYS + навигация). */
   setHover(hit: GizmoPickResult | null): void {
     const hoveredFace = hit?.kind === "face" ? hit.face : null;
+    const FACE_IDLE = 0xffffff;
+    const FACE_DIM = 0xc9d2dd;
+    const FACE_HOVER = 0x7dd3fc;
     for (const [f, mesh] of this.faceMeshes) {
       const mat = mesh.material as THREE.MeshBasicMaterial;
-      mat.color.setHex(hoveredFace === null || hoveredFace === f ? 0xffffff : 0xc9d2dd);
+      if (hoveredFace === null) {
+        mat.color.setHex(FACE_IDLE);
+        mesh.scale.setScalar(1);
+      } else if (hoveredFace === f) {
+        mat.color.setHex(FACE_HOVER);
+        mesh.scale.setScalar(1.045);
+      } else {
+        mat.color.setHex(FACE_DIM);
+        mesh.scale.setScalar(1);
+      }
     }
 
     const hoveredEdge = hit?.kind === "edge" ? hit.edge : null;
@@ -147,7 +159,7 @@ export class GizmoCubeRenderer {
       const on = hoveredCorner !== null && cornersEqual(c, hoveredCorner);
       mat.color.setHex(on ? 0x38bdf8 : 0x64748b);
       mat.opacity = on ? 1 : 0.48;
-      const s = on ? 1.22 : 1;
+      const s = on ? 1.12 : 1;
       m.scale.setScalar(s);
     }
   }
