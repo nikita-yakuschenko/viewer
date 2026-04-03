@@ -15,11 +15,12 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
-const glassPanel =
-  "rounded-2xl border border-white/25 bg-background/55 shadow-2xl backdrop-blur-xl supports-[backdrop-filter]:bg-background/45";
+/** Общий glass для HUD: плотнее фон + явный тёмный текст (не muted на полупрозрачном слое). */
+export const hudGlassPanel =
+  "rounded-2xl border border-zinc-200/90 bg-white/92 text-zinc-950 shadow-lg shadow-zinc-900/10 backdrop-blur-xl dark:border-white/12 dark:bg-zinc-950/88 dark:text-zinc-50 dark:shadow-black/30";
 
-const structureLayerToolsDark =
-  "structure-layer-tools w-full rounded-xl border border-white/18 bg-[#0D0033] px-2.5 py-2.5 shadow-inner";
+const structureLayerToolsBar =
+  "structure-layer-tools w-full rounded-2xl border border-white/15 bg-zinc-900/40 px-2.5 py-2 shadow-inner backdrop-blur-md dark:bg-zinc-950/50";
 
 interface ToolbarProps {
   onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -32,8 +33,8 @@ export function Toolbar({ onFileUpload }: ToolbarProps) {
   return (
     <div
       className={cn(
-        glassPanel,
-        "flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+        hudGlassPanel,
+        "flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 transition-shadow"
       )}
     >
       <input
@@ -43,17 +44,19 @@ export function Toolbar({ onFileUpload }: ToolbarProps) {
         className="hidden"
         onChange={onFileUpload}
       />
-      <div className="text-sm font-semibold tracking-tight">BIM Viewer</div>
+      <div className="text-sm font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+        BIM Viewer
+      </div>
       <Button
         type="button"
         size="sm"
         variant="secondary"
-        className="shrink-0"
+        className="shrink-0 border-zinc-300/80 bg-white text-zinc-950 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-50 dark:hover:bg-zinc-700"
         onClick={() => fileInputRef.current?.click()}
         title="Открыть IFC-файл"
       >
         <IconFolderOpen className="mr-1.5 h-4 w-4" stroke={1.5} />
-        <span className="text-xs">Открыть</span>
+        <span className="text-xs font-medium">Открыть</span>
       </Button>
     </div>
   );
@@ -86,7 +89,7 @@ export function StructureLayerToolsPanel({
   onFitAll,
 }: StructureLayerToolsPanelProps) {
   return (
-    <div className={structureLayerToolsDark}>
+    <div className={structureLayerToolsBar}>
       <div className="flex w-full flex-wrap items-center justify-center gap-1">
         <StructureDarkToolButton
           onClick={onToggleAllLayersVisibility}
@@ -130,7 +133,7 @@ export function StructureLayerToolsPanel({
 
         <StructureDarkDivider />
 
-        <label className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-white/90">
+        <label className="inline-flex h-8 items-center gap-2 rounded-md px-2 text-xs font-medium text-zinc-100/90">
           <input
             type="checkbox"
             className="h-3.5 w-3.5 shrink-0 rounded border border-white/30 bg-background/40 accent-primary"
@@ -164,7 +167,7 @@ export function ViewportToolsPanel({
   onDeleteClips,
 }: ViewportToolsPanelProps) {
   return (
-    <div className={cn(glassPanel, "px-3 py-2.5")}>
+    <div className={cn(hudGlassPanel, "px-3 py-2.5")}>
       <div className="flex flex-wrap items-center justify-center gap-1">
         <ToolButton
           onClick={onToggleMeasure}
@@ -177,11 +180,11 @@ export function ViewportToolsPanel({
         </ToolButton>
         <ToolButton
           onClick={onDeleteMeasurements}
-          title="Удалить измерения"
+          title="Удалить все измерения"
           disabled={!modelLoaded}
         >
           <IconTrash className="h-4 w-4" stroke={1.5} />
-          <span className="ml-1 text-xs">Сброс</span>
+          <span className="ml-1 text-xs">Очистить замеры</span>
         </ToolButton>
 
         <Divider />
@@ -201,7 +204,7 @@ export function ViewportToolsPanel({
           disabled={!modelLoaded}
         >
           <IconTrash className="h-4 w-4" stroke={1.5} />
-          <span className="ml-1 text-xs">Сброс</span>
+          <span className="ml-1 text-xs">Очистить сечения</span>
         </ToolButton>
       </div>
     </div>
@@ -229,10 +232,10 @@ function StructureDarkToolButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium",
+        "inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-100/95",
         "transition-colors hover:bg-white/15 active:bg-white/20",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0D0033]",
-        active && "bg-white/18 text-white"
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900/50",
+        active && "bg-white/20 text-white"
       )}
     >
       {children}
@@ -242,7 +245,7 @@ function StructureDarkToolButton({
 
 function StructureDarkDivider() {
   return (
-    <Separator orientation="vertical" className="mx-0.5 h-5 bg-white/30" />
+    <Separator orientation="vertical" className="mx-0.5 h-5 bg-white/22" />
   );
 }
 
@@ -266,7 +269,11 @@ function ToolButton({
       disabled={disabled}
       size="sm"
       variant={active ? "default" : "ghost"}
-      className="h-8 shrink-0 px-2"
+      className={cn(
+        "h-8 shrink-0 px-2 font-medium",
+        !active &&
+          "text-zinc-900 hover:bg-zinc-900/6 hover:text-zinc-950 dark:text-zinc-100 dark:hover:bg-white/10 dark:hover:text-white"
+      )}
     >
       {children}
     </Button>
@@ -275,6 +282,6 @@ function ToolButton({
 
 function Divider() {
   return (
-    <Separator orientation="vertical" className="mx-0.5 h-5 bg-white/20" />
+    <Separator orientation="vertical" className="mx-0.5 h-5 bg-black/10 dark:bg-white/15" />
   );
 }

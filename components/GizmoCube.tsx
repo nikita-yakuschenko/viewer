@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import {
-  IconChevronDown,
-  IconChevronLeft,
-  IconChevronRight,
-  IconChevronUp,
+  IconArrowBigDown,
+  IconArrowBigLeft,
+  IconArrowBigRight,
+  IconArrowBigUp,
 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { GizmoCubeRenderer } from "./gizmo/GizmoCubeRenderer";
@@ -25,14 +25,17 @@ export type { ViewCubeCorner, ViewCubeDirection, ViewCubeEdge, ViewCubeStep };
 export { getEdgeViewDirectionUnit };
 
 const OUTER = 232;
-const RING_VIS_R = OUTER / 2 - 10;
-const RING_DRAG_R = 108;
-const RING_DRAG_STROKE = 18;
-const ARROW_INSET = 4;
-const CENTER_INSET = 38;
+/** Кольцо ближе к центру (меньше радиус), линия толще — см. strokeWidth у SVG */
+const RING_VIS_R = OUTER / 2 - 16;
+const RING_DRAG_R = 100;
+const RING_DRAG_STROKE = 22;
+const ARROW_INSET = 2;
+const CENTER_INSET = 32;
 /** Внутренний квадрат под куб: не оставляем крошечный canvas — иначе клиппинг и «лесенка». */
 const INNER = OUTER - CENTER_INSET * 2;
-const CUBE = Math.round(INNER * 0.92);
+const CUBE = Math.round(INNER * 0.96);
+/** Подложка под кубом; чуть запас под blur, чтобы не резать мягкий край */
+const CUBE_GLOW = Math.round(CUBE * 1.2);
 
 interface GizmoCubeProps {
   className?: string;
@@ -145,12 +148,12 @@ export function GizmoCube({
   }, []);
 
   const stepBtn =
-    "pointer-events-auto absolute z-[25] flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 shadow-sm transition-colors hover:border-sky-400 hover:bg-sky-50 hover:text-sky-700 active:scale-95";
+    "pointer-events-auto absolute z-[25] flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-zinc-300/80 bg-white text-zinc-800 shadow-sm transition-all hover:border-zinc-400 hover:bg-zinc-50 active:scale-[0.96] dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700";
 
   return (
     <div
       className={cn(
-        "pointer-events-auto select-none rounded-full border border-slate-200/95 bg-white/95 p-2 shadow-lg shadow-slate-200/60 backdrop-blur-sm",
+        "pointer-events-auto relative inline-block select-none drop-shadow-md",
         disabled && "pointer-events-none opacity-40",
         className
       )}
@@ -158,7 +161,7 @@ export function GizmoCube({
       aria-label="Куб видов и орбита"
     >
       <svg
-        className="pointer-events-none absolute left-0 top-0 z-0 text-slate-300"
+        className="pointer-events-none absolute left-0 top-0 z-0 text-zinc-400 dark:text-zinc-500"
         width={OUTER}
         height={OUTER}
       >
@@ -168,8 +171,8 @@ export function GizmoCube({
           r={RING_VIS_R}
           fill="none"
           stroke="currentColor"
-          strokeWidth={10}
-          strokeOpacity={0.35}
+          strokeWidth={10.5}
+          strokeOpacity={0.42}
         />
       </svg>
 
@@ -204,7 +207,7 @@ export function GizmoCube({
           onViewStep("up");
         }}
       >
-        <IconChevronUp size={22} stroke={2} />
+        <IconArrowBigUp size={18} stroke={1.75} />
       </button>
       <button
         type="button"
@@ -217,7 +220,7 @@ export function GizmoCube({
           onViewStep("down");
         }}
       >
-        <IconChevronDown size={22} stroke={2} />
+        <IconArrowBigDown size={18} stroke={1.75} />
       </button>
       <button
         type="button"
@@ -230,7 +233,7 @@ export function GizmoCube({
           onViewStep("left");
         }}
       >
-        <IconChevronLeft size={22} stroke={2} />
+        <IconArrowBigLeft size={18} stroke={1.75} />
       </button>
       <button
         type="button"
@@ -243,7 +246,7 @@ export function GizmoCube({
           onViewStep("right");
         }}
       >
-        <IconChevronRight size={22} stroke={2} />
+        <IconArrowBigRight size={18} stroke={1.75} />
       </button>
 
       <div
@@ -255,9 +258,19 @@ export function GizmoCube({
           height: OUTER - CENTER_INSET * 2,
         }}
       >
+        {/* Мягкое свечение: градиент → transparent + blur снимает видимый «ободок» круга */}
+        <div
+          aria-hidden
+          style={{ width: CUBE_GLOW, height: CUBE_GLOW }}
+          className={cn(
+            "pointer-events-none absolute left-1/2 top-1/2 z-0 -translate-x-1/2 -translate-y-1/2 rounded-full blur-[7px]",
+            "bg-[radial-gradient(circle_at_50%_44%,rgba(255,255,255,0.42)_0%,rgba(244,244,245,0.14)_28%,rgba(228,228,231,0.04)_46%,transparent_62%)]",
+            "dark:bg-[radial-gradient(circle_at_50%_44%,rgba(63,63,70,0.42)_0%,rgba(39,39,42,0.14)_30%,rgba(24,24,27,0.05)_48%,transparent_62%)]"
+          )}
+        />
         <div
           ref={canvasHostRef}
-          className="relative overflow-visible rounded-xl shadow-inner shadow-slate-200/80 ring-1 ring-slate-200/90"
+          className="relative z-10 overflow-visible"
           style={{ width: CUBE, height: CUBE }}
           onPointerMove={onCubePointerMove}
           onPointerLeave={onCubePointerLeave}

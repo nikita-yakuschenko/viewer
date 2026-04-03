@@ -13,7 +13,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
-import { StructureLayerToolsPanel } from "./Toolbar";
+import { StructureLayerToolsPanel, hudGlassPanel } from "./Toolbar";
 
 interface ModelTreeProps {
   treeData: TreeNode[];
@@ -45,11 +45,9 @@ interface ModelTreeProps {
   onToggleIsolateSelection: () => void;
 }
 
-const glassPanel =
-  "rounded-2xl border border-white/25 bg-background/55 shadow-2xl backdrop-blur-xl supports-[backdrop-filter]:bg-background/45";
-
+/** Вертикальный заголовок в свернутом виде: без text-primary (на тёмной подложке нечитаемо). */
 const verticalPanelTitleByButton =
-  "pointer-events-none absolute right-[0.875rem] top-1/2 z-[9] flex max-h-[calc(100%-0.75rem)] min-h-0 w-6 -translate-y-1/2 items-center justify-center overflow-visible px-0.5 py-1 text-xs font-semibold uppercase leading-tight tracking-[0.11em] whitespace-nowrap text-primary [writing-mode:vertical-rl] rotate-180 sm:text-sm";
+  "pointer-events-none absolute right-[0.875rem] top-1/2 z-[9] flex max-h-[calc(100%-0.75rem)] min-h-0 w-6 -translate-y-1/2 items-center justify-center overflow-visible px-0.5 py-1 text-xs font-semibold uppercase leading-tight tracking-[0.14em] whitespace-nowrap text-zinc-900 [writing-mode:vertical-rl] rotate-180 [text-shadow:0_1px_0_rgba(255,255,255,0.75)] sm:text-sm dark:text-zinc-50 dark:[text-shadow:0_1px_1px_rgba(0,0,0,0.45)]";
 
 const LAYER_NODE_TYPE = "IfcPresentationLayerAssignment";
 const PANEL_GROUP_TYPE = "IfcPanelGroup";
@@ -121,16 +119,21 @@ export function ModelTree({
   };
 
   return (
-    <div className={cn("relative flex h-full min-h-0 w-full flex-col", glassPanel)}>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl">
+    <div className={cn("relative flex h-full min-h-0 w-full flex-col", hudGlassPanel)}>
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl",
+          collapsed && "min-h-12 bg-white/50 dark:bg-zinc-900/35"
+        )}
+      >
         {!collapsed && (
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="shrink-0 border-b border-white/10 px-2.5 pb-2 pt-2.5">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-600 dark:text-zinc-400">
                 Файл
               </div>
               <div
-                className="mt-0.5 truncate text-xs font-medium leading-snug text-foreground"
+                className="mt-0.5 truncate text-xs font-semibold leading-snug text-zinc-950 dark:text-zinc-50"
                 title={modelName || undefined}
               >
                 {modelName || "—"}
@@ -141,7 +144,7 @@ export function ModelTree({
                 type="button"
                 disabled={!modelLoaded}
                 onClick={() => onToggleStructureCollapsed(!structureCollapsed)}
-                className="w-full rounded-md border border-white/15 bg-white/5 px-2 py-1 text-[10px] font-semibold text-muted-foreground transition-colors hover:bg-white/10 disabled:opacity-50"
+                className="w-full rounded-md border border-zinc-200/90 bg-zinc-100/90 px-2 py-1 text-[10px] font-semibold text-zinc-900 transition-colors hover:bg-zinc-200/90 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800/80 dark:text-zinc-100 dark:hover:bg-zinc-700/80"
                 title={
                   structureCollapsed
                     ? "Развернуть структуру (панель + подслои)"
@@ -154,11 +157,11 @@ export function ModelTree({
 
             <ScrollArea className="min-h-0 flex-1 px-1.5 pr-1 pt-0.5">
               {!modelLoaded ? (
-                <p className="mt-2 text-center text-xs text-muted-foreground">
+                <p className="mt-2 text-center text-xs text-zinc-700 dark:text-zinc-300">
                   Модель не загружена
                 </p>
               ) : treeData.length === 0 ? (
-                <p className="mt-2 text-center text-xs text-muted-foreground">
+                <p className="mt-2 text-center text-xs text-zinc-700 dark:text-zinc-300">
                   Строю структуру модели...
                 </p>
               ) : structureCollapsed ? (
@@ -173,7 +176,7 @@ export function ModelTree({
 
                   if (nodesToRender.length === 0) {
                     return (
-                      <p className="mt-2 text-center text-xs text-muted-foreground">
+                      <p className="mt-2 text-center text-xs text-zinc-700 dark:text-zinc-300">
                         Нет панелей
                       </p>
                     );
@@ -212,7 +215,7 @@ export function ModelTree({
                                 e.stopPropagation();
                                 onTogglePanelVisibility(layerNames);
                               }}
-                              className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-none"
+                              className="inline-flex shrink-0 rounded p-0.5 text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-white/10 hover:text-zinc-950 dark:hover:text-white focus-visible:outline-none"
                               aria-label={
                                 panelVisible
                                   ? `Скрыть панель ${node.name}`
@@ -230,7 +233,7 @@ export function ModelTree({
                                 <IconEyeOff className="h-3.5 w-3.5" stroke={1.8} />
                               )}
                             </button>
-                            <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                            <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-900 dark:text-zinc-100">
                               {node.name}
                             </span>
                           </div>
@@ -299,7 +302,7 @@ export function ModelTree({
       <button
         type="button"
         onClick={onClose}
-        className="absolute right-0 top-1/2 z-20 flex h-12 w-3.5 -translate-y-1/2 items-center justify-center rounded-l-[8px] rounded-r-none border-0 bg-[#0D0033] p-0 text-white transition-colors hover:bg-[#130048] focus-visible:outline-none"
+        className="absolute right-0 top-1/2 z-20 flex h-12 w-4 -translate-y-1/2 items-center justify-center rounded-l-lg rounded-r-none border border-r-0 border-zinc-200/90 bg-white/95 p-0 text-zinc-800 shadow-md shadow-zinc-900/10 backdrop-blur-md transition-colors hover:bg-white hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/40 dark:border-zinc-600 dark:bg-zinc-800/95 dark:text-zinc-100 dark:shadow-black/30 dark:hover:bg-zinc-700"
         aria-label={isOpen ? "Свернуть панель" : "Развернуть панель"}
       >
         <motion.span
@@ -350,7 +353,7 @@ function TreeNodeItem({
 
   if (node.type === "Info" || node.type === "Error") {
     return (
-      <div className="mb-1 rounded-md px-1.5 py-2 text-xs text-muted-foreground">
+      <div className="mb-1 rounded-md px-1.5 py-2 text-xs text-zinc-700 dark:text-zinc-300">
         {node.name}
       </div>
     );
@@ -386,7 +389,7 @@ function TreeNodeItem({
                   e.stopPropagation();
                   onTogglePanelExpanded(panelKey);
                 }}
-                className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-none"
+                className="inline-flex shrink-0 rounded p-0.5 text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-white/10 hover:text-zinc-950 dark:hover:text-white focus-visible:outline-none"
                 aria-label={expanded ? `Свернуть панель ${node.name}` : `Развернуть панель ${node.name}`}
                 title={expanded ? "Свернуть" : "Развернуть"}
               >
@@ -403,7 +406,7 @@ function TreeNodeItem({
                 e.stopPropagation();
                 onTogglePanelVisibility(layerNames);
               }}
-              className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-none"
+              className="inline-flex shrink-0 rounded p-0.5 text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-white/10 hover:text-zinc-950 dark:hover:text-white focus-visible:outline-none"
               aria-label={
                 panelVisible ? `Скрыть панель ${node.name}` : `Показать панель ${node.name}`
               }
@@ -415,7 +418,7 @@ function TreeNodeItem({
                 <IconEyeOff className="h-3.5 w-3.5" stroke={1.8} />
               )}
             </button>
-            <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-900 dark:text-zinc-100">
               {node.name}
             </span>
           </div>
@@ -446,7 +449,7 @@ function TreeNodeItem({
 
   if (!isLayerNode) {
     return (
-      <div className="rounded-md px-1.5 py-1.5 text-xs text-muted-foreground">
+      <div className="rounded-md px-1.5 py-1.5 text-xs text-zinc-700 dark:text-zinc-300">
         {node.name}
       </div>
     );
@@ -474,7 +477,7 @@ function TreeNodeItem({
               e.stopPropagation();
               onToggleLayerVisibility(node.name);
             }}
-            className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground focus-visible:outline-none"
+            className="inline-flex shrink-0 rounded p-0.5 text-zinc-700 dark:text-zinc-300 transition-colors hover:bg-white/10 hover:text-zinc-950 dark:hover:text-white focus-visible:outline-none"
             aria-label={layerVisible ? `Скрыть слой ${node.name}` : `Показать слой ${node.name}`}
             title={layerVisible ? "Скрыть слой" : "Показать слой"}
           >
@@ -484,7 +487,7 @@ function TreeNodeItem({
               <IconEyeOff className="h-3.5 w-3.5" stroke={1.8} />
             )}
           </button>
-          <span className="min-w-0 flex-1 truncate text-xs text-foreground">{node.name}</span>
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-900 dark:text-zinc-100">{node.name}</span>
         </div>
       </div>
     </div>

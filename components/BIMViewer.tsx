@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { ModelTree } from "./ModelTree";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { Toolbar, ViewportToolsPanel } from "./Toolbar";
+import { ViewerHelpPopover } from "./ViewerHelpPopover";
 import {
   ViewCube,
   type ViewCubeCorner,
@@ -47,7 +48,7 @@ const panelHeightTransition: Transition = {
 };
 
 const emptyStateGlass =
-  "max-w-md rounded-2xl border border-white/25 bg-background/55 px-10 py-9 shadow-2xl ring-1 ring-white/10 backdrop-blur-xl supports-[backdrop-filter]:bg-background/45";
+  "max-w-md rounded-2xl border border-zinc-200/90 bg-white/95 px-10 py-9 text-zinc-950 shadow-xl shadow-zinc-900/10 backdrop-blur-xl dark:border-white/12 dark:bg-zinc-950/90 dark:text-zinc-50";
 
 const PEEK_STRIP_SUM = "2.5rem";
 const PEEK_COLLAPSED_HEIGHT = "14rem";
@@ -624,32 +625,15 @@ export default function BIMViewer() {
         }}
       />
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-40 px-3 pt-3 sm:px-4 sm:pt-4">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-2">
-          <div className="pointer-events-auto">
+      {/* HUD: верхняя полоса + подсказка — единая ширина max-w-[1000px] */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex w-full justify-center pt-3 sm:pt-4">
+        <div className="pointer-events-auto flex w-full max-w-[1000px] items-start gap-2 px-4">
+          <div className="min-w-0 flex-1">
             <Toolbar onFileUpload={handleFileUpload} />
           </div>
           {modelLoaded && activeTool === "none" && (
-            <div className="hidden w-full md:block">
-              <div className="rounded-xl border border-white/12 bg-[#0D0033]/95 px-3 py-1.5 text-[10px] leading-snug text-white/88 shadow-md backdrop-blur-sm">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="shrink-0 font-semibold uppercase tracking-wider text-white/45">
-                    Управление
-                  </span>
-                  <span className="text-white/30">—</span>
-                  <span>Клик — слой IFC</span>
-                  <span className="text-white/35">·</span>
-                  <span>Shift+клик — ещё слой</span>
-                  <span className="text-white/35">·</span>
-                  <span>Ctrl+клик — элемент</span>
-                  <span className="text-white/35">·</span>
-                  <span>Ctrl+Shift — +элемент</span>
-                  <span className="text-white/35">·</span>
-                  <span>Tab — слой по клику</span>
-                  <span className="text-white/35">·</span>
-                  <span>Наведение — слой / Ctrl — элемент</span>
-                </div>
-              </div>
+            <div className="shrink-0 pt-0.5">
+              <ViewerHelpPopover />
             </div>
           )}
         </div>
@@ -741,12 +725,7 @@ export default function BIMViewer() {
 
       {modelLoaded && activeTool === "none" && (
         <ViewCube
-          className={cn(
-            "absolute top-3 z-39 hidden md:block",
-            showProperties
-              ? "right-[calc(0.75rem+min(18rem,100vw-1.5rem)+0.5rem)] sm:right-[calc(1rem+min(18rem,100vw-1.5rem)+0.5rem)]"
-              : "right-3 sm:right-4"
-          )}
+          className="fixed right-4 top-4 z-[35] hidden md:block"
           getCamera={getViewCubeCamera}
           getOrbitTarget={getViewCubeOrbitTarget}
           onFaceClick={handleViewCubeFace}
@@ -759,9 +738,9 @@ export default function BIMViewer() {
 
       {isLoading && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-3 rounded-2xl border border-white/20 bg-background/60 px-8 py-6 shadow-2xl backdrop-blur-xl">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border border-zinc-200/90 bg-white/95 px-8 py-6 text-zinc-950 shadow-xl backdrop-blur-xl dark:border-white/12 dark:bg-zinc-950/90 dark:text-zinc-50">
             <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            <span className="font-medium text-foreground">Загрузка IFC-модели...</span>
+            <span className="font-semibold">Загрузка IFC-модели...</span>
           </div>
         </div>
       )}
@@ -780,10 +759,10 @@ export default function BIMViewer() {
             <div className="mb-4 text-5xl leading-none drop-shadow-sm sm:text-6xl" aria-hidden>
               🏗️
             </div>
-            <p className="text-lg font-medium leading-snug text-foreground">
+            <p className="text-lg font-semibold leading-snug text-zinc-950 dark:text-zinc-50">
               Загрузите IFC-файл, чтобы начать работу
             </p>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            <p className="mt-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
               Нажмите «Открыть» в верхней панели
             </p>
           </motion.div>
@@ -791,25 +770,25 @@ export default function BIMViewer() {
       )}
 
       {modelLoaded && (hoverLayerLabel != null || selectionCaption !== "") && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-21 z-34 flex justify-center px-3 sm:bottom-22 sm:px-4">
-          <div className="flex w-full max-w-xl flex-wrap items-end justify-between gap-2 rounded-xl border border-white/12 bg-[#0D0033]/95 px-3 py-2 text-[11px] leading-snug text-white/90 shadow-lg backdrop-blur-sm">
+        <div className="pointer-events-none absolute inset-x-0 bottom-21 z-34 flex w-full justify-center px-4 sm:bottom-22">
+          <div className="flex w-full max-w-[1000px] flex-wrap items-end justify-between gap-2 rounded-2xl border border-zinc-200/90 bg-white/92 px-3 py-2 text-[11px] leading-snug text-zinc-950 shadow-lg backdrop-blur-xl dark:border-white/12 dark:bg-zinc-950/88 dark:text-zinc-50">
             <div className="min-w-0 flex-1">
               {hoverLayerLabel != null && (
                 <div>
-                  <span className="text-white/45">Наведение</span>
-                  <span className="mx-1.5 text-white/35">·</span>
-                  <span className="font-medium text-white">{hoverLayerLabel}</span>
+                  <span className="text-zinc-600 dark:text-zinc-400">Наведение</span>
+                  <span className="mx-1.5 text-zinc-400 dark:text-zinc-500">·</span>
+                  <span className="font-medium text-zinc-950 dark:text-zinc-50">{hoverLayerLabel}</span>
                 </div>
               )}
               {selectionCaption !== "" && (
                 <div
                   className={cn(
-                    hoverLayerLabel != null && "mt-1.5 border-t border-white/10 pt-1.5"
+                    hoverLayerLabel != null && "mt-1.5 border-t border-zinc-200/80 pt-1.5 dark:border-zinc-600/80"
                   )}
                 >
-                  <span className="text-white/45">Выбор</span>
-                  <span className="mx-1.5 text-white/35">·</span>
-                  <span className="font-medium text-pink-100/95">{selectionCaption}</span>
+                  <span className="text-zinc-600 dark:text-zinc-400">Выбор</span>
+                  <span className="mx-1.5 text-zinc-400 dark:text-zinc-500">·</span>
+                  <span className="font-medium text-zinc-950 dark:text-zinc-50">{selectionCaption}</span>
                 </div>
               )}
             </div>
@@ -818,9 +797,9 @@ export default function BIMViewer() {
                 type="button"
                 aria-label="Сбросить выделение"
                 onClick={() => void handleClearSelection()}
-                className="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-lg border border-red-500/35 bg-red-950/40 px-2 py-1 text-[10px] font-medium text-red-200 transition-colors hover:border-red-400/50 hover:bg-red-950/70"
+                className="pointer-events-auto inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-500/25 bg-rose-500/8 px-2 py-1 text-[10px] font-medium text-rose-800 transition-colors hover:bg-rose-500/14 dark:text-rose-200/90 dark:border-rose-400/30"
               >
-                <IconX className="h-3.5 w-3.5 text-red-400" stroke={2.2} aria-hidden />
+                <IconX className="h-3.5 w-3.5 opacity-80" stroke={2.2} aria-hidden />
                 Сбросить выделение
               </button>
             )}
@@ -828,8 +807,8 @@ export default function BIMViewer() {
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-40 flex justify-center px-3 sm:px-4">
-        <div className="pointer-events-auto w-full max-w-xl">
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-40 flex w-full justify-center">
+        <div className="pointer-events-auto w-full max-w-[1000px] px-4">
           <ViewportToolsPanel
             modelLoaded={modelLoaded}
             activeTool={activeTool}
@@ -845,14 +824,14 @@ export default function BIMViewer() {
 
       {activeTool !== "none" && (
         <div className="pointer-events-none absolute bottom-30 left-1/2 z-40 -translate-x-1/2 px-4 sm:bottom-32">
-          <div className="pointer-events-auto rounded-full border border-white/25 bg-background/55 px-4 py-2 text-sm text-foreground shadow-xl backdrop-blur-xl">
+          <div className="pointer-events-auto rounded-full border border-zinc-200/90 bg-white/95 px-4 py-2 text-sm text-zinc-950 shadow-lg backdrop-blur-xl dark:border-white/12 dark:bg-zinc-950/90 dark:text-zinc-50">
             {activeTool === "measure" ? (
               <span>
                 {quickMeasureLabel ? (
                   <>
-                    <span className="text-muted-foreground">Быстрый замер: </span>
+                    <span className="text-zinc-600 dark:text-zinc-400">Быстрый замер: </span>
                     <span className="font-medium tabular-nums">{quickMeasureLabel}</span>
-                    <span className="mx-2 text-muted-foreground">·</span>
+                    <span className="mx-2 text-zinc-400">·</span>
                   </>
                 ) : null}
                 Двойной клик — зафиксировать измерение · Delete — удалить
