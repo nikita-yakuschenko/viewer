@@ -1,0 +1,100 @@
+diff --git a/node_modules/@thatopen/components/dist/index.cjs b/node_modules/@thatopen/components/dist/index.cjs
+index 7ea4d0e..a0acc3b 100644
+--- a/node_modules/@thatopen/components/dist/index.cjs
++++ b/node_modules/@thatopen/components/dist/index.cjs
+@@ -11969,7 +11969,7 @@ const _Components = class _Components {
+      * Default value is false.
+      */
+     __publicField(this, "enabled", false);
+-    __publicField(this, "_clock");
++    __publicField(this, "_timer");
+     /**
+      * Event that triggers the Components instance is initialized.
+      *
+@@ -11992,7 +11992,8 @@ const _Components = class _Components {
+     __publicField(this, "update", () => {
+       if (!this.enabled)
+         return;
+-      const delta = this._clock.getDelta();
++      this._timer.update();
++      const delta = this._timer.getDelta();
+       for (const [_id, component] of this.list) {
+         if (component.enabled && component.isUpdateable()) {
+           component.update(delta);
+@@ -12000,7 +12001,7 @@ const _Components = class _Components {
+       }
+       requestAnimationFrame(this.update);
+     });
+-    this._clock = new THREE__namespace.Clock();
++    this._timer = new THREE__namespace.Timer();
+     _Components.setupBVH();
+   }
+   /**
+@@ -12056,7 +12057,7 @@ const _Components = class _Components {
+     for (const [_, component] of this.list.entries()) {
+       component.enabled = true;
+     }
+-    this._clock.start();
++    this._timer.reset();
+     this.update();
+     this.onInit.trigger();
+   }
+@@ -12089,7 +12090,7 @@ const _Components = class _Components {
+       }
+     }
+     fragments == null ? void 0 : fragments.dispose();
+-    this._clock.stop();
++    this._timer.dispose();
+     this.onDisposed.trigger();
+   }
+   static setupBVH() {
+diff --git a/node_modules/@thatopen/components/dist/index.mjs b/node_modules/@thatopen/components/dist/index.mjs
+index ff5a879..007bcb5 100644
+--- a/node_modules/@thatopen/components/dist/index.mjs
++++ b/node_modules/@thatopen/components/dist/index.mjs
+@@ -11950,7 +11950,7 @@ const _Components = class _Components {
+      * Default value is false.
+      */
+     __publicField(this, "enabled", false);
+-    __publicField(this, "_clock");
++    __publicField(this, "_timer");
+     /**
+      * Event that triggers the Components instance is initialized.
+      *
+@@ -11973,7 +11973,8 @@ const _Components = class _Components {
+     __publicField(this, "update", () => {
+       if (!this.enabled)
+         return;
+-      const delta = this._clock.getDelta();
++      this._timer.update();
++      const delta = this._timer.getDelta();
+       for (const [_id, component] of this.list) {
+         if (component.enabled && component.isUpdateable()) {
+           component.update(delta);
+@@ -11981,7 +11982,7 @@ const _Components = class _Components {
+       }
+       requestAnimationFrame(this.update);
+     });
+-    this._clock = new THREE$1.Clock();
++    this._timer = new THREE$1.Timer();
+     _Components.setupBVH();
+   }
+   /**
+@@ -12037,7 +12038,7 @@ const _Components = class _Components {
+     for (const [_, component] of this.list.entries()) {
+       component.enabled = true;
+     }
+-    this._clock.start();
++    this._timer.reset();
+     this.update();
+     this.onInit.trigger();
+   }
+@@ -12070,7 +12071,7 @@ const _Components = class _Components {
+       }
+     }
+     fragments == null ? void 0 : fragments.dispose();
+-    this._clock.stop();
++    this._timer.dispose();
+     this.onDisposed.trigger();
+   }
+   static setupBVH() {

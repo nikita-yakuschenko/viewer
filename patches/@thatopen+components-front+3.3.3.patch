@@ -1,0 +1,41 @@
+diff --git a/node_modules/@thatopen/components-front/dist/index.js b/node_modules/@thatopen/components-front/dist/index.js
+index 36c8251..dbc4662 100644
+--- a/node_modules/@thatopen/components-front/dist/index.js
++++ b/node_modules/@thatopen/components-front/dist/index.js
+@@ -7568,14 +7568,15 @@ function wd() {
+ }
+ const $a = class el {
+   constructor() {
+-    E(this, "onDisposed", new $()), E(this, "list", new Je()), E(this, "enabled", !1), E(this, "_clock"), E(this, "onInit", new $()), E(this, "update", () => {
++    E(this, "onDisposed", new $()), E(this, "list", new Je()), E(this, "enabled", !1), E(this, "_timer"), E(this, "onInit", new $()), E(this, "update", () => {
+       if (!this.enabled)
+         return;
+-      const t = this._clock.getDelta();
++      this._timer.update();
++      const t = this._timer.getDelta();
+       for (const [e, s] of this.list)
+         s.enabled && s.isUpdateable() && s.update(t);
+       requestAnimationFrame(this.update);
+-    }), this._clock = new P.Clock(), el.setupBVH();
++    }), this._timer = new P.Timer(), el.setupBVH();
+   }
+   /**
+    * Adds a component to the list of components.
+@@ -7622,7 +7623,7 @@ const $a = class el {
+     this.enabled = !0;
+     for (const [t, e] of this.list.entries())
+       e.enabled = !0;
+-    this._clock.start(), this.update(), this.onInit.trigger();
++    this._timer.reset(), this.update(), this.onInit.trigger();
+   }
+   /**
+    * Disposes the memory of all the components and tools of this instance of
+@@ -7649,7 +7650,7 @@ const $a = class el {
+       }
+       s.isDisposeable() && s.dispose();
+     }
+-    t == null || t.dispose(), this._clock.stop(), this.onDisposed.trigger();
++    t == null || t.dispose(), this._timer.dispose(), this.onDisposed.trigger();
+   }
+   static setupBVH() {
+     P.BufferGeometry.prototype.computeBoundsTree = yd, P.BufferGeometry.prototype.disposeBoundsTree = wd, P.Mesh.prototype.raycast = vd;

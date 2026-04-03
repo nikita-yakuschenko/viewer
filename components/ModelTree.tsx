@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { TreeNode } from "./BIMViewer";
+import type { TreeNode } from "@/viewer/core/ViewerTypes";
 import {
   IconChevronCompactLeft,
   IconChevronCompactRight,

@@ -1,6 +1,6 @@
 "use client";
 
-import { PropertySet } from "./BIMViewer";
+import type { PropertySet } from "@/viewer/core/ViewerTypes";
 import { IconChevronCompactLeft, IconChevronCompactRight } from "@tabler/icons-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -53,13 +53,13 @@ export function PropertiesPanel({ properties, onClose, collapsed, isOpen }: Prop
                             )}
                           >
                             <div
-                              className="w-[38%] shrink-0 break-words border-r border-white/10 px-2 py-1 font-medium text-muted-foreground"
+                              className="w-[38%] shrink-0 wrap-break-word border-r border-white/10 px-2 py-1 font-medium text-muted-foreground"
                               title={prop.name}
                             >
                               {prop.name}
                             </div>
                             <div
-                              className="min-w-0 flex-1 break-words px-2 py-1 text-foreground [overflow-wrap:anywhere]"
+                              className="min-w-0 flex-1 px-2 py-1 text-foreground wrap-anywhere"
                               title={display}
                             >
                               {prop.value === null ? (
